@@ -18,6 +18,7 @@ DOMINIO         = os.getenv("DOMINIO_EMAIL", "telconet.ec")
 GEMINI_URL      = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=" + (GEMINI_API_KEY or "")
 
 USUARIOS_AUTENTICADOS = set()
+RECORRIDOS_ACTIVOS = {}  # rutas de inspeccion en vivo (app web), compartido con /evento del bot
 RUTAS_GUARDADAS = {}
 
 # MODO PRUEBA: solo se generan REPORTES_DE_RECORRIDOS y FOTOS_ANEXAS_AL_REPORTE.
@@ -39,7 +40,8 @@ GENERAR_HOJAS_EXTRA = False
  GENERAR_HORA_FIN, GENERAR_NOVEDADES,
  TAB_MENU, TAB_CIU_HERR, TAB_CIU_EQUI, TAB_CIU_MATE,
  TAB_MPRIU, TAB_REPORTES, TAB_NOVEDADES_IA,
- VIDEO_BASE_NOMBRE, VIDEO_BASE_UPLOAD) = range(52)
+ VIDEO_BASE_NOMBRE, VIDEO_BASE_UPLOAD,
+ EVENTO_RUTA, EVENTO_MOTIVO, EVENTO_COORD, EVENTO_FOTO) = range(56)
 
 NOVEDADES_MPRIU = [
     "HERRAJES EN MAL ESTADO.", "FALTA DE HERRAJES.", "POSTES EN MAL ESTADO.",
@@ -139,6 +141,49 @@ async def analizar_imagen(img_bytes):
         logger.error("Gemini error: " + str(e))
         return None
 
+async def buscar_foto_base(lat: float, lon: float, radio_m: int = 15):
+    """Busca en Mapillary la foto base mas cercana a una coordenada GPS."""
+    if not MAPILLARY_TOKEN:
+        logger.warning("MAPILLARY_TOKEN no configurado")
+        return None
+    url = "https://graph.mapillary.com/images"
+    params = {"access_token": MAPILLARY_TOKEN, "fields": "id,thumb_1024_url,geometry", "closeto": f"{lon},{lat}", "radius": radio_m}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url, params=params)
+            data = resp.json().get("data", [])
+            if not data:
+                return None
+            img = data[0]
+            img_resp = await client.get(img["thumb_1024_url"])
+            return {"id": img["id"], "bytes": img_resp.content}
+    except Exception as e:
+        logger.error("Error buscando foto base en Mapillary: " + str(e))
+        return None
+
+async def comparar_con_gemini_2fotos(foto_base_bytes, foto_nueva_bytes):
+    """Compara la foto del video base contra la foto actual del mismo punto GPS."""
+    prompt = ('Compara estas dos fotos del mismo punto de una ruta de fibra optica. '
+              'Foto 1 = estado BASE (referencia). Foto 2 = estado ACTUAL. Responde SOLO JSON: '
+              '{"clasificacion": "SIN_NOVEDAD|ATENCION|CRITICO", "motivo": "texto en MAYUSCULAS o vacio"}')
+    payload = {"contents": [{"parts": [
+        {"text": prompt},
+        {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(foto_base_bytes).decode()}},
+        {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(foto_nueva_bytes).decode()}},
+    ]}]}
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(GEMINI_URL, json=payload)
+            texto = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+            texto = texto.replace("```json", "").replace("```", "").strip()
+            return json.loads(texto)
+    except Exception as e:
+        logger.error("Error comparando con Gemini: " + str(e))
+        return {"clasificacion": "SIN_NOVEDAD", "motivo": ""}
+
+def link_mapillary(image_id, lat, lon):
+    return f"https://www.mapillary.com/app/?pKey={image_id}&focus=photo&lat={lat}&lng={lon}&z=17"
+
 # ── EXCEL ─────────────────────────────────────────────────────────────────────
 def _logo_image():
     from openpyxl.drawing.image import Image as XLImage
@@ -151,6 +196,50 @@ def _logo_image():
     except Exception as e:
         logger.warning("No se pudo cargar el logo: " + str(e))
         return None
+
+def estampar_foto(img_bytes, lat=None, lon=None, ubicacion="", codigo_ruta=""):
+    """Superpone el logo de Telconet arriba y fecha/hora + coordenadas + ubicacion +
+    codigo de ruta abajo (franja oscura semi-transparente), estilo GPS Map Camera."""
+    from PIL import Image, ImageDraw, ImageFont
+    try:
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+        w, h = img.size
+        overlay = Image.new("RGBA", img.size, (0,0,0,0))
+        draw = ImageDraw.Draw(overlay)
+        try:
+            logo = Image.open(io.BytesIO(base64.b64decode(LOGO_B64))).convert("RGBA")
+            logo_w = int(w * 0.32)
+            logo_h = int(logo.height * (logo_w / logo.width))
+            logo = logo.resize((logo_w, logo_h))
+            alpha = logo.split()[3].point(lambda p: int(p*0.75))
+            logo.putalpha(alpha)
+            overlay.paste(logo, ((w - logo_w)//2, int(h * 0.04)), logo)
+        except Exception as e:
+            logger.warning("No se pudo pegar el logo en la foto: " + str(e))
+        ahora = datetime.now()
+        lineas = [ahora.strftime("%d %b %Y %H:%M:%S")]
+        if lat is not None and lon is not None:
+            ns = "S" if lat < 0 else "N"; ew = "W" if lon < 0 else "E"
+            lineas.append(f"{abs(lat):.4f}{ns} {abs(lon):.4f}{ew}")
+        if ubicacion: lineas.append(ubicacion)
+        if codigo_ruta: lineas.append(codigo_ruta)
+        size_fuente = max(14, int(w * 0.028))
+        try:
+            fuente = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size_fuente)
+        except Exception:
+            fuente = ImageFont.load_default()
+        pad = int(w * 0.02); alto_linea = int(size_fuente * 1.35)
+        alto_franja = pad*2 + alto_linea*len(lineas)
+        draw.rectangle([0, h-alto_franja, w, h], fill=(0,0,0,140))
+        y = h - alto_franja + pad
+        for linea in lineas:
+            draw.text((pad, y), linea, font=fuente, fill=(255,255,255,255)); y += alto_linea
+        resultado = Image.alpha_composite(img, overlay).convert("RGB")
+        buf = io.BytesIO(); resultado.save(buf, format="JPEG", quality=88)
+        return buf.getvalue()
+    except Exception as e:
+        logger.warning("No se pudo estampar la foto: " + str(e))
+        return img_bytes
 
 def _insertar_foto_celda(ws, fila, col, img_bytes, ancho_px=255, alto_px=400):
     """Inserta una foto (bytes JPEG/PNG) ajustada dentro de la celda foto, con pequeño margen."""
@@ -411,18 +500,27 @@ def generar_excel(datos):
     f2=10
     for n_idx in range(1, 21):
         nov = novedades[n_idx-1] if n_idx <= len(novedades) else None
+        es_sin_novedad = nov and nov.get("motivo","") == SIN_NOV_MOTIVO
         ws2.merge_cells(start_row=f2, start_column=2, end_row=f2+1, end_column=2)
         for fr in (f2, f2+1): ws2.cell(fr,2).border = _BORDE_GRUESO
         c_lbl = ws2.cell(f2,2,"NOVEDAD # "+str(n_idx))
         c_lbl.font = Font(bold=True, name="Calibri", size=11, color="000000")
         c_lbl.alignment = _Al(horizontal="center", vertical="center", wrap_text=True)
-        _hdr(ws2, f2, 3, 3, "ANTES DEL MANTENIMIENTO", borde=_BORDE_GRUESO)
-        _hdr(ws2, f2, 4, 5, "DESPU\u00c9S DEL MANTENIMIENTO", borde=_BORDE_GRUESO)
-        f2+=1; ws2.row_dimensions[f2].height=315
-        _val(ws2, f2, 3, 3, "", borde=_BORDE_GRUESO); _val(ws2, f2, 4, 5, "", borde=_BORDE_GRUESO)
-        if nov:
-            _insertar_foto_celda(ws2, f2, 3, nov.get("foto_antes"))
-            _insertar_foto_celda(ws2, f2, 4, nov.get("foto_despues"))
+        if es_sin_novedad:
+            ws2.merge_cells(start_row=f2, start_column=3, end_row=f2, end_column=5)
+            _hdr(ws2, f2, 3, 5, "EN ESTE PUNTO LA RUTA EST\u00c1 SIN NOVEDAD", borde=_BORDE_GRUESO)
+            f2+=1; ws2.row_dimensions[f2].height=315
+            ws2.merge_cells(start_row=f2, start_column=3, end_row=f2, end_column=5)
+            _val(ws2, f2, 3, 5, "", borde=_BORDE_GRUESO)
+            _insertar_foto_celda(ws2, f2, 3, nov.get("foto_antes"), ancho_px=630, alto_px=400)
+        else:
+            _hdr(ws2, f2, 3, 3, "ANTES DEL MANTENIMIENTO", borde=_BORDE_GRUESO)
+            _hdr(ws2, f2, 4, 5, "DESPU\u00c9S DEL MANTENIMIENTO", borde=_BORDE_GRUESO)
+            f2+=1; ws2.row_dimensions[f2].height=315
+            _val(ws2, f2, 3, 3, "", borde=_BORDE_GRUESO); _val(ws2, f2, 4, 5, "", borde=_BORDE_GRUESO)
+            if nov:
+                _insertar_foto_celda(ws2, f2, 3, nov.get("foto_antes"))
+                _insertar_foto_celda(ws2, f2, 4, nov.get("foto_despues"))
         f2+=2
 
     ws2.merge_cells(start_row=f2, start_column=2, end_row=f2+1, end_column=2)
@@ -1059,16 +1157,143 @@ async def preguntar(update, ctx):
         respuesta_texto = "No pude obtener respuesta de Gemini ahorita. Intenta de nuevo."
     await update.message.reply_text(respuesta_texto)
 
+# ── EVENTO MANUAL — agrega una novedad a una ruta activa de la app web ─────────
+async def evento_inicio(update, ctx):
+    if not RECORRIDOS_ACTIVOS:
+        await update.message.reply_text("No hay ninguna ruta en inspeccion en vivo ahorita.\nAbre la app web y presiona Detener antes de usar /evento.")
+        return ConversationHandler.END
+    rutas = list(RECORRIDOS_ACTIVOS.keys())
+    if len(rutas) == 1:
+        ctx.user_data["evento_ruta"] = rutas[0]
+        await update.message.reply_text("Agregando novedad manual a: "+rutas[0]+chr(10)+chr(10)+"Escribe el motivo (ej. VEGETACION SOBRE FIBRA/MANGA.):")
+        return EVENTO_MOTIVO
+    teclado=[[r] for r in rutas]
+    await update.message.reply_text("Que ruta activa?",reply_markup=ReplyKeyboardMarkup(teclado,resize_keyboard=True,one_time_keyboard=True))
+    return EVENTO_RUTA
+
+async def evento_ruta(update, ctx):
+    ruta = update.message.text.strip()
+    if ruta not in RECORRIDOS_ACTIVOS:
+        await update.message.reply_text("Esa ruta no esta activa. Cancelado."); return ConversationHandler.END
+    ctx.user_data["evento_ruta"] = ruta
+    await update.message.reply_text("Escribe el motivo (ej. VEGETACION SOBRE FIBRA/MANGA.):",reply_markup=ReplyKeyboardRemove())
+    return EVENTO_MOTIVO
+
+async def evento_motivo(update, ctx):
+    ctx.user_data["evento_motivo"] = update.message.text.strip().upper()
+    await update.message.reply_text("Coordenadas en formato lat,lon (o escribe - si no tienes):")
+    return EVENTO_COORD
+
+async def evento_coord(update, ctx):
+    txt = update.message.text.strip()
+    ctx.user_data["evento_coord"] = "" if txt=="-" else txt
+    await update.message.reply_text("Envia una foto de la novedad (o escribe - para omitir):")
+    return EVENTO_FOTO
+
+async def evento_foto(update, ctx):
+    ruta = ctx.user_data.get("evento_ruta")
+    if ruta not in RECORRIDOS_ACTIVOS:
+        await update.message.reply_text("Esa ruta ya no esta activa. Cancelado."); return ConversationHandler.END
+    foto_bytes = None
+    if update.message.photo:
+        f = await update.message.photo[-1].get_file()
+        foto_bytes = bytes(await f.download_as_bytearray())
+        _lat=_lon=None
+        _coord = ctx.user_data.get("evento_coord","")
+        if "," in _coord:
+            try:
+                _lat,_lon = [float(x.strip()) for x in _coord.split(",")[:2]]
+            except Exception:
+                _lat=_lon=None
+        foto_bytes = estampar_foto(foto_bytes, lat=_lat, lon=_lon, ubicacion="", codigo_ruta=ruta)
+    novedades = RECORRIDOS_ACTIVOS[ruta]["novedades"]
+    novedad = {
+        "numero": len(novedades)+1,
+        "motivo": ctx.user_data.get("evento_motivo",""),
+        "clasificacion": "MANUAL",
+        "coordenadas": ctx.user_data.get("evento_coord",""),
+        "foto_antes": foto_bytes, "foto_despues": None,
+        "link_munequito": "", "hora": datetime.now().strftime("%H:%M:%S"),
+    }
+    novedades.append(novedad)
+    await update.message.reply_text(
+        "✅ Novedad #"+str(novedad["numero"])+" agregada manualmente a "+ruta+chr(10)+
+        "Motivo: "+novedad["motivo"]+chr(10)+chr(10)+
+        "Cuando termines, vuelve a la app web y presiona Continuar para seguir la inspeccion automatica.")
+    ctx.user_data.pop("evento_ruta",None); ctx.user_data.pop("evento_motivo",None); ctx.user_data.pop("evento_coord",None)
+    return ConversationHandler.END
+
 async def cancelar(update, ctx):
     ctx.user_data.clear()
     await update.message.reply_text("Cancelado.",reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
 # ── SERVIDOR WEB ──────────────────────────────────────────────────────────────
-class PingHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"RecorridosIA OK")
-    def log_message(self,format,*args): pass
+# ── SERVIDOR WEB (FastAPI: ping + app de inspeccion en vivo) ───────────────────
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
+import uvicorn
+
+fastapi_app = FastAPI(title="RecorridosIA")
+
+if os.path.isdir("static"):
+    fastapi_app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@fastapi_app.get("/")
+async def ping():
+    return HTMLResponse("RecorridosIA OK")
+
+@fastapi_app.get("/inspeccion")
+async def pagina_inspeccion():
+    with open("static/index.html", encoding="utf-8") as f:
+        return HTMLResponse(f.read())
+
+@fastapi_app.websocket("/ws/{ruta_nombre}")
+async def ws_inspeccion(websocket: WebSocket, ruta_nombre: str):
+    await websocket.accept()
+    if ruta_nombre not in RECORRIDOS_ACTIVOS:
+        RECORRIDOS_ACTIVOS[ruta_nombre] = {"novedades": [], "inicio": datetime.now().strftime("%d/%m/%Y %H:%M:%S")}
+    try:
+        while True:
+            mensaje = await websocket.receive_json()
+            lat, lon = mensaje["lat"], mensaje["lon"]
+            frame_bytes = base64.b64decode(mensaje["frame_b64"])
+            frame_bytes = estampar_foto(frame_bytes, lat=lat, lon=lon, ubicacion="", codigo_ruta=ruta_nombre)
+            base = await buscar_foto_base(lat, lon)
+            if not base:
+                await websocket.send_json({"estado": "sin_referencia", "lat": lat, "lon": lon}); continue
+            resultado = await comparar_con_gemini_2fotos(base["bytes"], frame_bytes)
+            clasificacion = resultado.get("clasificacion", "SIN_NOVEDAD")
+            motivo = resultado.get("motivo", "")
+            respuesta = {"estado": "ok", "clasificacion": clasificacion, "motivo": motivo, "lat": lat, "lon": lon}
+            if clasificacion != "SIN_NOVEDAD":
+                novedad = {"numero": len(RECORRIDOS_ACTIVOS[ruta_nombre]["novedades"]) + 1, "motivo": motivo,
+                           "clasificacion": clasificacion, "coordenadas": f"{lat},{lon}",
+                           "foto_antes": base["bytes"], "foto_despues": frame_bytes,
+                           "link_munequito": link_mapillary(base["id"], lat, lon),
+                           "hora": datetime.now().strftime("%H:%M:%S")}
+                RECORRIDOS_ACTIVOS[ruta_nombre]["novedades"].append(novedad)
+                respuesta["numero_novedad"] = novedad["numero"]
+            await websocket.send_json(respuesta)
+    except WebSocketDisconnect:
+        logger.info(f"Conexion en vivo cerrada: {ruta_nombre}")
+
+@fastapi_app.post("/finalizar/{ruta_nombre}")
+async def finalizar_recorrido(ruta_nombre: str):
+    info = RECORRIDOS_ACTIVOS.get(ruta_nombre)
+    if not info:
+        return {"error": "No hay un recorrido activo con ese nombre"}
+    datos = datos_vacios()
+    datos["recorrido"]["nombre_ruta"] = ruta_nombre
+    datos["recorrido"]["fecha"] = datetime.now().strftime("%d/%m/%Y")
+    datos["recorrido"]["novedades"] = info["novedades"]
+    datos["recorrido"]["fotos_total"] = len(info["novedades"])
+    xls_bytes = generar_excel(datos)
+    del RECORRIDOS_ACTIVOS[ruta_nombre]
+    return StreamingResponse(io.BytesIO(xls_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="REPORTE_{ruta_nombre}.xlsx"'})
 
 def ping_render():
     import urllib.request
@@ -1081,16 +1306,15 @@ def ping_render():
 
 def start_web():
     port=int(os.getenv("PORT",8080))
-    server=HTTPServer(("0.0.0.0",port),PingHandler)
-    logger.info("Servidor web en puerto "+str(port))
+    logger.info("Servidor FastAPI en puerto "+str(port))
     threading.Thread(target=ping_render,daemon=True).start()
-    server.serve_forever()
+    uvicorn.run(fastapi_app, host="0.0.0.0", port=port)
 
 # ── BUILD APP ─────────────────────────────────────────────────────────────────
 def build_app():
     app=Application.builder().token(BOT_TOKEN).build()
     conv=ConversationHandler(
-        entry_points=[CommandHandler("start",start),CommandHandler("inspeccionar",generar_informe),MessageHandler(filters.Regex("Generar Informe"),generar_informe),MessageHandler(filters.Regex("Nueva Ruta Base"),nueva_ruta),MessageHandler(filters.Regex("Mis Rutas"),mis_rutas),MessageHandler(filters.Regex("Ayuda"),ayuda)],
+        entry_points=[CommandHandler("start",start),CommandHandler("inspeccionar",generar_informe),CommandHandler("evento",evento_inicio),MessageHandler(filters.Regex("Generar Informe"),generar_informe),MessageHandler(filters.Regex("Nueva Ruta Base"),nueva_ruta),MessageHandler(filters.Regex("Mis Rutas"),mis_rutas),MessageHandler(filters.Regex("Ayuda"),ayuda)],
         states={
             ESPERANDO_TOTP:   [MessageHandler(filters.TEXT&~filters.COMMAND,handler_totp)],
             MENU_PRINCIPAL:   [MessageHandler(filters.Regex("Generar Informe"),generar_informe),MessageHandler(filters.Regex("Nueva Ruta Base"),nueva_ruta),MessageHandler(filters.Regex("Mis Rutas"),mis_rutas),MessageHandler(filters.Regex("Ayuda"),ayuda),MessageHandler(filters.TEXT&~filters.COMMAND,menu_principal)],
@@ -1108,6 +1332,10 @@ def build_app():
             HILO_DATOS:       [MessageHandler(filters.TEXT&~filters.COMMAND,recv_hilo_datos)],
             NUEVA_RUTA_NOMBRE:[MessageHandler(filters.TEXT&~filters.COMMAND,recv_nueva_ruta_nombre)],
             NUEVA_RUTA_VIDEO: [MessageHandler(filters.TEXT|filters.VIDEO|filters.Document.ALL&~filters.COMMAND,recv_nueva_ruta_video)],
+            EVENTO_RUTA:      [MessageHandler(filters.TEXT&~filters.COMMAND,evento_ruta)],
+            EVENTO_MOTIVO:    [MessageHandler(filters.TEXT&~filters.COMMAND,evento_motivo)],
+            EVENTO_COORD:     [MessageHandler(filters.TEXT&~filters.COMMAND,evento_coord)],
+            EVENTO_FOTO:      [MessageHandler(filters.PHOTO|filters.TEXT&~filters.COMMAND,evento_foto)],
         },
         fallbacks=[CommandHandler("cancelar",cancelar)],
         allow_reentry=True,
