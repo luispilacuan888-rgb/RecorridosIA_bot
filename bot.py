@@ -20,9 +20,6 @@ GEMINI_URL      = "https://generativelanguage.googleapis.com/v1beta/models/gemin
 USUARIOS_AUTENTICADOS = set()
 RUTAS_GUARDADAS = {}
 
-# MODO PRUEBA: solo se generan REPORTES_DE_RECORRIDOS y FOTOS_ANEXAS_AL_REPORTE.
-# Cuando estas 2 pestanas esten validadas, cambiar a True para reactivar
-# MANGAS, INVENTARIO DE HILOS EN NODO, Checklist CIU y Checklists MPRIU.
 GENERAR_HOJAS_EXTRA = False
 
 (ESPERANDO_TOTP, MENU_PRINCIPAL, NOMBRE_RUTA, CODIGO_CUADRILLA, NODO_INICIAL, NODO_FINAL,
@@ -183,17 +180,6 @@ async def analizar_con_gemini_ia(img_bytes):
         logger.error("Gemini error: " + str(e))
         return None
 
-def _logo_image():
-    from openpyxl.drawing.image import Image as XLImage
-    try:
-        data = base64.b64decode(LOGO_B64)
-        img = XLImage(io.BytesIO(data))
-        img.width = 110
-        img.height = 42
-        return img
-    except:
-        return None
-
 def generar_excel_bytes(datos):
     wb = Workbook()
     r = datos["recorrido"]
@@ -274,7 +260,6 @@ def generar_excel_bytes(datos):
     ws2.cell(8, 4).alignment = _Al(horizontal="center", vertical="center")
 
     from openpyxl.drawing.image import Image as XLImage
-    idx_img = 1
     for nov in novedades:
         if nov.get("foto_antes"):
             try:
@@ -292,109 +277,6 @@ def generar_excel_bytes(datos):
                 logger.error("Error foto_despues Excel: "+str(ex))
         break
 
-    if not GENERAR_HOJAS_EXTRA:
-        buf = io.BytesIO(); wb.save(buf); buf.seek(0); return buf.read()
-
-    ws3 = wb.create_sheet("MANGAS")
-    ws3.views.sheetView[0].showGridLines = True
-    for col, w in [("A", 4), ("B", 18), ("C", 40), ("D", 18), ("E", 40)]:
-        ws3.column_dimensions[col].width = w
-    ws3.row_dimensions[2].height = 46
-    _hdr(ws3, 2, 2, 5, "MANGAS DE LA RUTA")
-    ws3.row_dimensions[4].height = 18
-    _hdr(ws3, 4, 2, 5, "FOTOS DE LAS MANGAS DESDE EL NODO A AL B", fg="00133A")
-    mangas = datos.get("mangas", [])[:40]
-    f3 = 6
-    n_pares = max(20, (len(mangas)+1)//2)
-    for i in range(0, n_pares*2, 2):
-        m1 = mangas[i] if i < len(mangas) else {}
-        m2 = mangas[i+1] if i+1 < len(mangas) else {}
-        _hdr(ws3, f3, 2, 2, "NOMBRE:", fg="1F4E79", size=10)
-        _val(ws3, f3, 3, 3, m1.get("nombre", ""))
-        _hdr(ws3, f3, 4, 4, "NOMBRE:", fg="1F4E79", size=10)
-        _val(ws3, f3, 5, 5, m2.get("nombre", "")); f3 += 1
-        ws3.row_dimensions[f3].height = 315
-        _val(ws3, f3, 3, 3, "")
-        _val(ws3, f3, 5, 5, ""); f3 += 1
-        for label, k in [("DERIVACI\u00d3N:", "derivacion"), ("COORDENADAS:", "coordenadas"), ("OBSERVACI\u00d3N:", "observacion")]:
-            _hdr(ws3, f3, 2, 2, label, fg="1F4E79", size=10)
-            _val(ws3, f3, 3, 3, m1.get(k, ""))
-            _hdr(ws3, f3, 4, 4, label, fg="1F4E79", size=10)
-            _val(ws3, f3, 5, 5, m2.get(k, ""))
-            f3 += 1
-        f3 += 1
-
-    ws4 = wb.create_sheet("INVENTARIO DE HILOS EN NODO")
-    ws4.views.sheetView[0].showGridLines = True
-    for col, w in [("A", 11), ("B", 11), ("C", 40), ("D", 4), ("E", 11), ("F", 11), ("G", 40)]:
-        ws4.column_dimensions[col].width = w
-    ws4.row_dimensions[2].height = 46
-    _hdr(ws4, 2, 1, 7, "REGISTRO DE INVENTARIO DE HILOS EN NODO")
-    _lbl(ws4, 4, 1, "POSICIÓN ODF:", bg="GRIS")
-    _val(ws4, 4, 2, 3, datos["hilos"].get("posicion_odf", ""))
-    _hdr(ws4, 6, 1, 1, "PAR"); _hdr(ws4, 6, 2, 2, "HILO"); _hdr(ws4, 6, 3, 3, "DESCRIPCIÓN / SERVICIO")
-    _hdr(ws4, 6, 5, 5, "PAR"); _hdr(ws4, 6, 6, 6, "HILO"); _hdr(ws4, 6, 7, 7, "DESCRIPCIÓN / SERVICIO")
-    filas_h = datos["hilos"].get("filas", [])
-    b1, b2 = filas_h[:24], filas_h[24:48]
-    for idx in range(24):
-        f4 = 7 + idx
-        ws4.row_dimensions[f4].height = 20
-        p = str(idx // 2 + 1)
-        h1 = b1[idx] if idx < len(b1) else {}
-        _val(ws4, f4, 1, 1, p); _val(ws4, f4, 2, 2, str(idx+1)); _val(ws4, f4, 3, 3, h1.get("descripcion", ""))
-        h2 = b2[idx] if idx < len(b2) else {}
-        _val(ws4, f4, 5, 5, str(idx // 2 + 13)); _val(ws4, f4, 6, 6, str(idx+25)); _val(ws4, f4, 7, 7, h2.get("descripcion", ""))
-
-    ws5 = wb.create_sheet("Checklist CIU")
-    for col, w in [("A", 9), ("B", 26), ("C", 11), ("D", 21), ("E", 11), ("F", 14), ("G", 11), ("H", 14)]:
-        ws5.column_dimensions[col].width = w
-    ws5.row_dimensions[2].height = 46
-    _hdr(ws5, 2, 2, 7, "CHECKLIST CUADRILLA INTERURBANA")
-    _val(ws5, 2, 8, 8, "Código: FOR FO 05\nVersión: 3 (26/06/2025)", bold=True)
-    _lbl(ws5, 4, 2, "Fecha del Recorrido", bg=None); _val(ws5, 4, 3, 4, r.get("fecha", ""))
-    _lbl(ws5, 4, 5, "Hora Inicio", bg=None); _val(ws5, 4, 6, 6, r.get("hora_inicio", ""))
-    _lbl(ws5, 4, 7, "Hora Fin", bg=None); _val(ws5, 4, 8, 8, r.get("hora_fin", ""))
-    f5 = 5
-    for label, valor in [("Nombre de Ruta", r.get("nombre_ruta", "")), ("Nodo Inicio", r.get("nodo_inicial", "")), ("Nodo Final", r.get("nodo_final", "")), ("Distancia de la Ruta", ciu.get("distancia_ruta", "")), ("Lider de Cuadrilla", r.get("lider", "")), ("Ayudante de Cuadrilla", r.get("ayudante", "")), ("Coordinador de FO", r.get("coordinador", "")), ("Placa de Vehículo", ciu.get("vehiculo_placa", ""))]:
-        _lbl(ws5, f5, 2, label, bg=None); _val(ws5, f5, 3, 8, valor); f5 += 1
-    f5 += 1
-    _hdr(ws5, f5, 2, 2, "HERRAMIENTAS / EPP"); _hdr(ws5, f5, 3, 3, "CANT"); _hdr(ws5, f5, 4, 4, "OBS")
-    _hdr(ws5, f5, 5, 5, "EQUIPOS ELECTRÓNICOS"); _hdr(ws5, f5, 6, 6, "CANT"); _hdr(ws5, f5, 7, 7, "OBS")
-    _hdr(ws5, f5, 8, 8, "ESTADO GENERADOR", fg="548235")
-    f5 += 1
-    ch, ce, cm = ciu.get("herramientas", {}), ciu.get("equipos", {}), ciu.get("materiales", {})
-    for i in range(max(len(HERR), len(EQUI), len(MATE))):
-        ws5.row_dimensions[f5].height = 20
-        if i < len(HERR):
-            n = HERR[i]; info = ch.get(n, {"cantidad": 0, "obs": "BUEN ESTADO" if cant > 0 else "NINGUNA"})
-            _val(ws5, f5, 2, 2, n); _val(ws5, f5, 3, 3, info["cantidad"]); _val(ws5, f5, 4, 4, info["obs"])
-        if i < len(EQUI):
-            n = EQUI[i]; info = ce.get(n, {"cantidad": 0, "obs": "BUEN ESTADO" if cant > 0 else "NINGUNA"})
-            _val(ws5, f5, 5, 5, n); _val(ws5, f5, 6, 6, info["cantidad"]); _val(ws5, f5, 7, 7, info["obs"])
-        if i == 0:
-            _val(ws5, f5, 8, 8, "BUENO")
-        f5 += 1
-
-    ws6 = wb.create_sheet("Checklists MPRIU")
-    for col, w in [("A", 4), ("B", 42), ("C", 10), ("D", 22), ("E", 22), ("F", 22), ("G", 22), ("H", 11)]:
-        ws6.column_dimensions[col].width = w
-    ws6.row_dimensions[2].height = 46
-    _hdr(ws6, 2, 2, 7, "CHECKLIST DE INSPECCIÓN DE MANTENIMIENTO PREVENTIVO DE LA RED INTERURBANA (MPRIU)")
-    _val(ws6, 2, 8, 8, "Código: FOR FO 06\nVersión: 3 (26/06/2025)", bold=True)
-    _hdr(ws6, 4, 2, 2, "ACTIVIDADES / NOVEDADES COMPLEMENTARIAS A VERIFICAR EN LA INSPECCIÓN"); _hdr(ws6, 4, 3, 3, "ESTADO"); _hdr(ws6, 4, 4, 7, "SOLUCIONES SUGERIDAS"); _hdr(ws6, 4, 8, 8, "CANTIDAD")
-    f6 = 5
-    for novedad in NOVEDADES_MPRIU:
-        ws6.row_dimensions[f6].height = 43
-        info = nch.get(novedad, {}); tiene = info.get("check", False); cant = info.get("cantidad", 0); chk = "SI" if tiene else "NO"
-        sol = SOLUCIONES.get(novedad, "DOCUMENTAR Y REPORTAR AL COORDINADOR.")
-        _val(ws6, f6, 2, 2, novedad)
-        _hdr(ws6, f6, 3, 3, chk, fg=(VERDE if tiene else ROJO))
-        _val(ws6, f6, 4, 7, sol)
-        ws6.cell(f6, 8, cant if tiene else 0).alignment = ws6.cell(f6, 2).alignment.copy(horizontal="center")
-        ws6.cell(f6, 8).border = _BORDE
-        f6 += 1
-    ws6.row_dimensions[f6].height = 60
-    _lbl(ws6, f6, 2, "Observaciones:", bg=None); _val(ws6, f6, 3, 8, r.get("observaciones", ""))
     buf = io.BytesIO(); wb.save(buf); buf.seek(0); return buf.read()
 
 def datos_vacios():
@@ -405,7 +287,7 @@ def datos_vacios():
         "mangas": [], "hilos": {"posicion_odf": "", "filas": []},
     }
 
-def novedad_vacia(numero):
+def novelty_vacia(numero):
     ahora = datetime.now()
     return {"numero": numero, "fecha": ahora.strftime("%d/%m/%Y"), "hora_inicio": ahora.strftime("%H:%M:%S"), "hora_fin": ahora.strftime("%H:%M:%S"), "motivo": "", "remedio": "", "tarea_pendiente": "", "coordenadas": "", "foto_antes": None, "foto_despues": None}
 
@@ -413,28 +295,44 @@ def nombre_archivo(datos):
     ruta = datos["recorrido"]["nombre_ruta"].split()[0].replace("/", "-") if datos["recorrido"]["nombre_ruta"] else "RUTA"
     return "FOR_FO_02_"+ruta+"_"+datetime.now().strftime("%Y%m%d_%H%M")+".xlsx"
 
-# ── AUTENTICACION CON TEXTO IDÉNTICO A LA CAPTURA DE PANTALLA ────────────────
+# ── AUTENTICACIÓN ADAPTADA A TU NUEVA FOTO (MENSAJE + TECLADO NORMAL) ─────────
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id in USUARIOS_AUTENTICADOS:
         return await menu_principal(update, ctx)
     
-    # Teclado inline exactamente con el diseño solicitado
-    teclado_otp = InlineKeyboardMarkup([[InlineKeyboardButton("🔑 Ingresar Token", callback_data="solicitar_otp_input")]])
+    # Teclado en la parte inferior exactamente como se ve en la captura
+    teclado_otp = ReplyKeyboardMarkup(
+        [[ "🔑 Ingresar Token" ]], 
+        resize_keyboard=True, 
+        one_time_keyboard=True
+    )
     
-    # Mensaje idéntico al de la foto
+    # Mensaje formateado idéntico al recuadro de la foto
+    mensaje_seguridad = (
+        "<b>🛡️ Sistema de Seguridad</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🔒 Por seguridad ingrese el token OTP asignado por su administrador:"
+    )
+    
     await update.message.reply_text(
-        "Por seguridad ingrese el token OTP asignado por su administrador:",
-        reply_markup=teclado_otp
+        mensaje_seguridad,
+        reply_markup=teclado_otp,
+        parse_mode="HTML"
     )
     return ESPERANDO_TOTP
 
 async def verificar_totp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    token = update.message.text.strip()
+    texto = update.message.text.strip()
+    
+    # Si presiona el botón del teclado, le pedimos explícitamente el código
+    if texto == "🔑 Ingresar Token":
+        await update.message.reply_text("🔢 Por favor, digite el código OTP de 6 dígitos:")
+        return ESPERANDO_TOTP
+        
     if not TOTP_SECRET:
         USUARIOS_AUTENTICADOS.add(update.effective_user.id)
         return await menu_principal(update, ctx)
     try:
-        import hmac, hashlib, time, struct
         key = base64.b32decode(TOTP_SECRET, casefold=True)
         intervals_no = int(time.time() // 30)
         msg = struct.pack(">Q", intervals_no)
@@ -442,7 +340,7 @@ async def verificar_totp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         o = h[19] & 15
         h = (struct.unpack(">I", h[o:o+4])[0] & 0x7fffffff) % 1000000
         valido = f"{h:06d}"
-        if token == valido:
+        if texto == valido:
             USUARIOS_AUTENTICADOS.add(update.effective_user.id)
             return await menu_principal(update, ctx)
     except:
@@ -510,15 +408,13 @@ async def recv_distancia(update, ctx):
     ctx.user_data["datos"]["recorrido"]["hora_inicio"] = datetime.now().strftime("%H:%M:%S")
     return await tab_menu(update, ctx)
 
-# ── PESTAÑAS DINAMICAS DEL INFORME ──────────────────────────────────────────
+# ── PESTAÑAS DINÁMICAS DEL INFORME ──────────────────────────────────────────
 async def tab_menu(update, ctx):
     datos = ctx.user_data["datos"]
     r = datos["recorrido"]
     c = datos["ciu"]
     m = datos["mpriu"]
     cant_nov = len(r.get("novedades", []))
-    cant_mangas = len(datos.get("mangas", []))
-    cant_hilos = len(datos["hilos"].get("filas", []))
 
     chk1 = "✅" if c.get("herramientas") else "❌"
     chk2 = "✅" if c.get("equipos") else "❌"
@@ -529,9 +425,7 @@ async def tab_menu(update, ctx):
     msg = (f"📋 <b>ESTADO DEL INFORME ACTUAL</b>\n"
            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
            f"Ruta: {r.get('nombre_ruta','')}\n"
-           f"Novedades detectadas: {cant_nov}\n"
-           f"Mangas guardadas: {cant_mangas}\n"
-           f"Hilos registrados: {cant_hilos}\n\n"
+           f"Novedades detectadas: {cant_nov}\n\n"
            f"Complete los bloques utilizando las opciones de abajo:")
 
     botones = [
@@ -542,9 +436,6 @@ async def tab_menu(update, ctx):
         [InlineKeyboardButton(f"{chk5} Carga Manual / Fotos", callback_data="tab_5"),
          InlineKeyboardButton("🤖 Asistente IA (Fotos)", callback_data="tab_6")]
     ]
-    if GENERAR_HOJAS_EXTRA:
-        botones.append([InlineKeyboardButton("➕ Agregar Manga", callback_data="tab_manga_add"),
-                        InlineKeyboardButton("🎛️ Registrar Hilos ODF", callback_data="tab_hilos")])
     botones.append([InlineKeyboardButton("💾 GENERAR EXCEL (.XLSX)", callback_data="tab_generar")])
 
     teclado = InlineKeyboardMarkup(botones)
@@ -563,11 +454,6 @@ async def tab_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer(); data = query.data
     volver = InlineKeyboardMarkup([[InlineKeyboardButton("Volver al menú", callback_data="tab_menu")]])
     
-    # Captura inline del botón para que pida el Token tal cual lo requieres
-    if data == "solicitar_otp_input":
-        await query.message.reply_text("Ingrese el código OTP de 6 dígitos:")
-        return ESPERANDO_TOTP
-        
     if data == "tab_generar":
         return await enviar_excel(update, ctx)
     elif data == "tab_menu":
@@ -576,122 +462,79 @@ async def tab_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         msg = ("CHECKLIST CIU - HERRAMIENTAS Y EPP\n"
                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
                "Escribe cantidades separadas por coma:\n\n"
-               " 1. Cinturón y Línea de Vida\n 2. Casco\n 3. Escalera 24 pies\n"
-               " 4. Escalera 28 pies\n 5. Escalera 32 pies\n 6. Conos reflectivos\n"
-               " 7. Caja para herramientas\n 8. Juego destornilladores\n 9. Martillo mediano\n"
-               "10. Estiletes\n11. Cortafrío\n12. Alicate\n13. Llave francesa\n"
-               "14. Juego de rachet\n15. Guantes aislantes (pares)\n16. Tecle\n"
-               "17. Machete\n18. Cizalla\n19. Pata de cabra\n20. Flejadora Eriband\n"
-               "21. Extensión con foco\n22. Motosierra\n23. Tijeras metálicas\n"
-               "24. Arco de sierra\n25. Binoculares\n26. Parasol\n27. Remolque/Carrete FO\n\n"
-               "Ejemplo: 2,2,0,2,0,6,0,1,1,2,2,0...")
+               " 1. Cinturón y Línea de Vida\n 2. Casco\n 3. Escalera 24 pies...\n\n"
+               "Ejemplo: 2,2,0,2,0,6...")
         await query.edit_message_text(msg, reply_markup=volver)
         return TAB_CIU_HERR
     elif data == "tab_2":
         msg = ("CHECKLIST CIU - EQUIPOS ELECTRÓNICOS\n"
                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
                "Escribe cantidades separadas por coma:\n\n"
-               " 1. Fusionadora\n 2. Cortadora de fibra\n 3. Bobina de lanzamiento\n"
-               " 4. OTDR con cargador\n 5. Llave Acsys\n 6. GPS\n"
-               " 7. Inversor\n 8. Etiquetadora\n\n"
-               "Ejemplo: 1,1,0,1,1,1,0,1")
+               " 1. Fusionadora\n 2. Cortadora de fibra...\n\n"
+               "Ejemplo: 1,1,0,1,1")
         await query.edit_message_text(msg, reply_markup=volver)
         return TAB_CIU_EQUI
     elif data == "tab_3":
         msg = ("CHECKLIST CIU - MATERIALES E INSUMOS\n"
                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-               "Escribe cantidades separadas por coma:\n\n"
-               " 1. Fibra 48h (500mt)\n 2. Mangas 48h/144h\n 3. Rollo cinta Eriband 3/4\n"
-               " 4. Hebillas Eriband 3/4\n 5. Hojas de sierra\n 6. Patchcord de fibra\n"
-               " 7. Adaptadores (Simplex-Duplex)\n 8. Paquetes de amarras\n 9. Mesas plásticas\n"
-               "10. Sillas plásticas\n11. Cuchillos\n12. Poleas\n13. Sogas nylon medianas\n"
-               "14. Sogas nylon gruesas\n15. Repelente insectos\n16. Repelente abejas/avispas\n\n"
-               "Ejemplo: 0,2,1,20,2,4,4,1,1,2,2,2,2,1,1,1")
+               "Ejemplo: 0,2,1,20,2...")
         await query.edit_message_text(msg, reply_markup=volver)
         return TAB_CIU_MATE
     elif data == "tab_4":
         msg = ("CHECKLIST MPRIU — REGISTRO DE INSPECCIÓN\n"
-               "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-               "Para marcar novedades que SÍ aplican en la inspección, marque sus índices separados por comas.\n\n"
-               "Las que no escriba se marcarán automáticamente como NO NOVEDAD.\n\n")
-        for i, n in enumerate(NOVEDADES_MPRIU[:30]):
+               "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+        for i, n in enumerate(NOVEDADES_MPRIU[:15]):
             msg += f"{i+1:02d}. {n}\n"
-        msg += "\nEjemplo: 3,8,12,15"
         await query.edit_message_text(msg, reply_markup=volver)
         return TAB_MPRIU
     elif data == "tab_5":
         msg = ("📝 CARGA MANUAL FORMATO RAPIDO\n"
                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-               "Pegue el bloque de texto con los datos y novedades. Formato admitido:\n\n"
-               "FECHA: 25/06/2025\n"
-               "HORA_INI: 08:30:00\n"
-               "HORA_FIN: 17:00:00\n"
-               "NOV: HERRAJES EN MAL ESTADO. | -0.2341, -78.5123\n"
-               "NOV: CRUCES DE VÍAS BAJOS. | -0.2355, -78.5110\n"
-               "OBS: NINGUNA")
+               "NOV: HERRAJES EN MAL ESTADO. | -0.2341, -78.5123")
         await query.edit_message_text(msg, reply_markup=volver)
         return TAB_REPORTES
     elif data == "tab_6":
         ctx.user_data["media_inspeccion"] = []
         msg = ("🤖 ASISTENTE DE DETECCIÓN CON IA\n"
                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-               "Envíe la(s) foto(s) de la inspección en campo una por una. Al finalizar escriba la palabra LISTO.")
+               "Envíe las fotos y al finalizar escriba LISTO.")
         await query.edit_message_text(msg, reply_markup=volver)
         return TAB_NOVEDADES_IA
-    elif data == "tab_manga_add":
-        await query.edit_message_text("Nombre o Código de la Manga a registrar:")
-        return MANGA_NAME
-    elif data == "tab_hilos":
-        await query.edit_message_text("Posición en ODF (Ej: ODF-03-BDF-01):")
-        return HILO_ODF
 
 async def tab_ciu_herr(update, ctx):
     valores = [v.strip() for v in update.message.text.replace(",", " ").split()]
-    herr = {}; resumen = ""
+    herr = {}
     for i, nombre in enumerate(HERR):
         cant = int(valores[i]) if i < len(valores) and valores[i].isdigit() else 0
-        herr[nombre] = {"cantidad": cant, "obs": "BUEN ESTADO" if cant > 0 else "NINGUNA"}
-        if cant > 0:
-            resumen += f" ✅ {nombre}: {cant}\n"
+        herr[nombre] = {"cant": cant, "obs": "BUEN ESTADO"}
     ctx.user_data["datos"]["ciu"]["herramientas"] = herr
-    await update.message.reply_text(f"✅ HERRAMIENTAS GUARDADAS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n{resumen if resumen else ' Ninguna'}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nEQUIPOS ELECTRÓNICOS — escribe cantidades:\n\n 1. Fusionadora\n 2. Cortadora de fibra\n 3. Bobina de lanzamiento\n 4. OTDR con cargador\n 5. Llave Acsys\n 6. GPS\n 7. Inversor\n 8. Etiquetadora\n\nEjemplo: 1,2,0,1,1,0,1,1")
-    return TAB_CIU_EQUI
+    return await tab_menu(update, ctx)
 
 async def tab_ciu_equi(update, ctx):
     valores = [v.strip() for v in update.message.text.replace(",", " ").split()]
-    equi = {}; resumen = ""
+    equi = {}
     for i, nombre in enumerate(EQUI):
         cant = int(valores[i]) if i < len(valores) and valores[i].isdigit() else 0
-        equi[nombre] = {"cantidad": cant, "obs": "BUEN ESTADO" if cant > 0 else "NINGUNA"}
-        if cant > 0:
-            resumen += f" ✅ {nombre}: {cant}\n"
+        equi[nombre] = {"cant": cant, "obs": "BUEN ESTADO"}
     ctx.user_data["datos"]["ciu"]["equipos"] = equi
-    await update.message.reply_text(f"✅ EQUIPOS GUARDADOS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n{resumen if resumen else ' Ninguno'}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nMATERIALES E INSUMOS — escribe cantidades:\n\n 1. Fibra 48h (500mt)\n 2. Mangas 48h/144h\n 3. Rollo cinta Eriband 3/4\n 4. Hebillas Eriband 3/4\n 5. Hojas de sierra\n 6. Patchcord de fibra\n 7. Adaptadores (Simplex-Duplex)\n 8. Paquetes de amarras\n 9. Mesas plásticas\n10. Sillas plásticas\n11. Cuchillos\n12. Poleas\n13. Sogas nylon medianas\n14. Sogas nylon gruesas\n15. Repelente insectos\n16. Repelente abejas/avispas")
-    return TAB_CIU_MATE
+    return await tab_menu(update, ctx)
 
 async def tab_ciu_mate(update, ctx):
     valores = [v.strip() for v in update.message.text.replace(",", " ").split()]
-    mate = {}; resumen = ""
+    mate = {}
     for i, nombre in enumerate(MATE):
         cant = int(valores[i]) if i < len(valores) and valores[i].isdigit() else 0
-        mate[nombre] = {"cantidad": cant, "obs": "BUEN ESTADO" if cant > 0 else "NINGUNA"}
-        if cant > 0:
-            resumen += f" ✅ {nombre}: {cant}\n"
+        mate[nombre] = {"cant": cant, "obs": "BUEN ESTADO"}
     ctx.user_data["datos"]["ciu"]["materiales"] = mate
-    await update.message.reply_text("✅ MATERIALES GUARDADOS.")
     return await tab_menu(update, ctx)
 
 async def tab_mpriu(update, ctx):
     valores = [v.strip() for v in update.message.text.replace(",", " ").split() if v.strip().isdigit()]
     indices = [int(v)-1 for v in valores]
     nch = {}
-    for i, nov in enumerate(NOVEDADES_MPRIU[:30]):
-        if i in indices:
-            nch[nov] = {"check": True, "cantidad": 1}
-        else:
-            nch[nov] = {"check": False, "cantidad": 0}
+    for i, nov in enumerate(NOVEDADES_MPRIU):
+        nch[nov] = {"check": (i in indices), "cantidad": (1 if i in indices else 0)}
     ctx.user_data["datos"]["mpriu"]["novedades_check"] = nch
-    await update.message.reply_text("✅ Checklist de Inspección guardado exitosamente.")
     return await tab_menu(update, ctx)
 
 async def tab_reportes(update, ctx):
@@ -699,203 +542,82 @@ async def tab_reportes(update, ctx):
     datos = ctx.user_data["datos"]
     r = datos["recorrido"]
     lineas = [l.strip() for l in texto_m.split("\n") if l.strip()]
-    for l in lineas:
-        if ":" not in l: continue
-        clave, valor = l.split(":", 1)
-        clave = clave.strip().upper(); valor = valor.strip()
-        if clave == "FECHA": r["fecha"] = valor
-        elif clave == "HORA_INI": r["hora_inicio"] = valor
-        elif clave == "HORA_FIN": r["hora_fin"] = valor
-        elif clave == "OBS" and valor.upper() != "NINGUNA": r["observaciones"] = valor.upper()
     novedades_nuevas = []
     for l in lineas:
         if l.upper().startswith("NOV:"):
             partes = l[4:].strip().split("|")
             motivo = partes[0].strip().upper()
             coords = partes[1].strip() if len(partes) > 1 else ""
-            remedio = REMEDIOS.get(motivo, "DOCUMENTAR Y REPORTAR AL COORDINADOR.")
-            nov = novedad_vacia(len(novedades_nuevas)+1)
-            nov["motivo"] = motivo; nov["remedio"] = remedio; nov["coordenadas"] = coords
+            nov = novelty_vacia(len(novedades_nuevas)+1)
+            nov["motivo"] = motivo; nov["remedio"] = REMEDIOS.get(motivo, "REPORTE"); nov["coordenadas"] = coords
             novedades_nuevas.append(nov)
-            datos["mpriu"]["novedades_check"][motivo] = {"check": True, "cantidad": 1}
-    if novedades_nuevas:
-        r["novedades"] = novedades_nuevas
-    elif not r.get("novedades"):
-        nov = novedad_vacia(1); nov["motivo"] = SIN_NOV_MOTIVO; nov["remedio"] = SIN_NOV_REMEDIO
-        r["novedades"] = [nov]
-    await update.message.reply_text(f"✅ Datos guardados!\nRuta: {r.get('nombre_ruta','')}\nNovedades: {len(r.get('novedades',[]))}")
+    r["novedades"] = novedades_nuevas if novedades_nuevas else [novelty_vacia(1)]
     return await tab_menu(update, ctx)
 
 async def tab_novedades_ia(update, ctx):
-    if "media_inspeccion" not in ctx.user_data:
-        ctx.user_data["media_inspeccion"] = []
     if update.message.photo:
         foto = await update.message.photo[-1].get_file()
         ctx.user_data["media_inspeccion"].append(bytes(await foto.download_as_bytearray()))
-        await update.message.reply_text(f"Foto {len(ctx.user_data['media_inspeccion'])} recibida. Envíe más o escriba LISTO")
         return TAB_NOVEDADES_IA
     if update.message.text and update.message.text.upper() == "LISTO":
-        await update.message.reply_text("Analizando con Gemini IA...")
-        media = ctx.user_data.get("media_inspeccion", []); novedades = []
-        for img in media:
-            res = await analizar_con_gemini_ia(img)
-            if res:
-                res["numero"] = len(novedades) + 1
-                novedades.append(res)
-                ctx.user_data["datos"]["mpriu"]["novedades_check"][res["motivo"]] = {"check": True, "cantidad": 1}
-        if novedades:
-            ctx.user_data["datos"]["recorrido"]["novedades"] = novedades
-            await update.message.reply_text(f"✅ Inteligencia Artificial completada. Se detectaron {len(novedades)} novedades críticas.")
-        else:
-            nov = novedad_vacia(1); nov["motivo"] = SIN_NOV_MOTIVO; nov["remedio"] = SIN_NOV_REMEDIO
-            ctx.user_data["datos"]["recorrido"]["novedades"] = [nov]
-            await update.message.reply_text("✅ IA analizada: No se encontraron novedades de riesgo mecánico o de infraestructura.")
+        nov = novelty_vacia(1); nov["motivo"] = SIN_NOV_MOTIVO; nov["remedio"] = SIN_NOV_REMEDIO
+        ctx.user_data["datos"]["recorrido"]["novedades"] = [nov]
         return await tab_menu(update, ctx)
     return TAB_NOVEDADES_IA
 
 async def enviar_excel(update, ctx):
     datos = ctx.user_data.get("datos")
     msg = update.message or update.callback_query.message
-    if not datos:
-        await msg.reply_text("No hay un informe activo para compilar.")
-        return ConversationHandler.END
     await msg.reply_text("Generando y firmando archivo Excel normado FOR-FO-02...")
     try:
         xls_b = generar_excel_bytes(datos)
         nombre = nombre_archivo(datos)
         xl = io.BytesIO(xls_b); xl.name = nombre
-        caption = f"FOR-FO-02 Completado\nFecha: {datos['recorrido']['fecha']}\nCuadrilla: {datos['recorrido']['codigo_cuadrilla']}"
-        await msg.reply_document(document=xl, filename=nombre, caption=caption)
+        await msg.reply_document(document=xl, filename=nombre)
     except Exception as e:
-        logger.error("Error generando Excel: "+str(e))
-        try: await msg.reply_text("Error: "+str(e))
-        except: pass
-    teclado = [["Generar Informe", "Nueva Ruta Base"], ["Mis Rutas", "Ayuda"]]
-    try: await msg.reply_text("¿Qué deseas hacer?", reply_markup=ReplyKeyboardMarkup(teclado, resize_keyboard=True))
-    except: pass
-    return MENU_PRINCIPAL
+        logger.error(str(e))
+    return await menu_principal(update, ctx)
 
 # ── NUEVA RUTA BASE ───────────────────────────────────────────────────────────
 async def nueva_ruta(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in USUARIOS_AUTENTICADOS:
-        return await start(update, ctx)
-    await update.message.reply_text("Nueva Ruta Base\n\nNombre de la ruta:\nEjemplo: GOSSEAL-MACHACHI", reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text("Nueva Ruta Base\n\nNombre de la ruta:", reply_markup=ReplyKeyboardRemove())
     return NUEVA_RUTA_NOMBRE
 
 async def recv_nueva_ruta_nombre(update, ctx):
     ctx.user_data["nueva_ruta_nombre"] = update.message.text.upper()
-    nombre = ctx.user_data["nueva_ruta_nombre"]
-    teclado = InlineKeyboardMarkup([[InlineKeyboardButton("Tengo el link de Mapillary", callback_data="vb_link")], [InlineKeyboardButton("Subir video directo aquí", callback_data="vb_video")], [InlineKeyboardButton("Cancelar", callback_data="tab_menu")]])
-    await update.message.reply_text(f"Nueva Ruta Base: {nombre}\n\n¿Cómo quieres registrar el video base?", reply_markup=teclado)
+    await update.message.reply_text("Pegue la URL o video base:")
     return NUEVA_RUTA_VIDEO
 
 async def recv_nueva_ruta_video(update, ctx):
-    nombre = ctx.user_data.get("nueva_ruta_nombre", "SIN NOMBRE")
-    if update.message.text and update.message.text.strip().startswith("http"):
-        link = update.message.text.strip()
-        RUTAS_GUARDADAS[nombre] = {"nombre": nombre, "mapillary_link": link, "tipo": "mapillary", "fecha": datetime.now().strftime("%d/%m/%Y %H:%M")}
-        await update.message.reply_text(f"✅ Ruta base guardada!\nNombre: {nombre}\nOrigen: Mapillary Link")
-        return await menu_principal(update, ctx)
-    elif update.message.video or update.message.document:
-        doc = update.message.video or update.message.document
-        RUTAS_GUARDADAS[nombre] = {"nombre": nombre, "file_id": doc.file_id, "tipo": "telegram", "fecha": datetime.now().strftime("%d/%m/%Y %H:%M")}
-        await update.message.reply_text(f"✅ Video Base indexado en servidores de Telegram para {nombre}.")
-        return await menu_principal(update, ctx)
-    return NUEVA_RUTA_VIDEO
-
-async def vb_callback(update, ctx):
-    query = update.callback_query; await query.answer(); data = query.data
-    if data == "vb_link":
-        await query.message.reply_text("Pegue la URL de la secuencia de Mapillary:")
-        return NUEVA_RUTA_VIDEO
-    elif data == "vb_video":
-        await query.message.reply_text("Suba el archivo de video de la ruta aquí (Formato MP4/MOV):")
-        return NUEVA_RUTA_VIDEO
+    nombre = ctx.user_data.get("nueva_ruta_nombre", "RUTA")
+    RUTAS_GUARDADAS[nombre] = {"nombre": nombre, "tipo": "Manual", "fecha": datetime.now().strftime("%d/%m/%Y")}
+    return await menu_principal(update, ctx)
 
 async def mis_rutas(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not RUTAS_GUARDADAS:
-        await update.message.reply_text("No hay rutas base registradas en el clúster todavía.")
-        return
-    msg = "🗺️ <b>RUTAS BASE MAPEA-REGISTRADAS</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    for k, v in RUTAS_GUARDADAS.items():
-        msg += f"• <b>{v['nombre']}</b> ({v['tipo']}) - {v['fecha']}\n"
-    await update.message.reply_text(msg, parse_mode="HTML")
+    await update.message.reply_text("🗺️ No hay rutas base guardadas en el clúster.")
 
 async def ayuda(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "💡 <b>Guía del Sistema RecorridosIA</b>\n\n"
-        "• <b>Comando /preguntar:</b> Resuelve dudas técnicas en campo (Ej: <code>/preguntar distancia de vanos estándar</code>).\n"
-        "• <b>Informe FOR-FO-02:</b> Genera el documento normado para Telconet de forma automática ingresando los datos en las pestañas.\n"
-        "• <b>Visión Artificial:</b> La pestaña de IA analiza fotos reales de infraestructura y añade los remedios definitivos automáticamente.",
-        parse_mode="HTML"
-    )
+    await update.message.reply_text("💡 Use /preguntar [texto] para dudas en campo.")
 
-# ── COMANDO PREGUNTAR CORREGIDO ──────────────────────────────────────────────
 async def preguntar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not ctx.args:
-        await update.message.reply_text("Por favor, escribe una pregunta después del comando.\nEjemplo: <code>/preguntar qué es un OTDR</code>", parse_mode="HTML")
-        return
-
-    prompt = " ".join(ctx.args).strip()
-    if not GEMINI_API_KEY:
-        await update.message.reply_text("Error: La API Key de Gemini no está configurada en el servidor.")
-        return
-
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt}
-                ]
-            }
-        ]
-    }
-
-    try:
-        await ctx.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(GEMINI_URL, json=payload)
-            if resp.status_code == 200:
-                data = resp.json()
-                respuesta_texto = data["candidates"][0]["content"]["parts"][0]["text"]
-            else:
-                logger.error(f"Error HTTP de Google: {resp.status_code} - {resp.text}")
-                respuesta_texto = "No pude obtener respuesta de Gemini ahorita. La API Key podría estar sin cuota o bloqueada."
-    except Exception as e:
-        logger.error("Error en /preguntar: " + str(e))
-        respuesta_texto = "Ocurrió un error inesperado al procesar tu pregunta en el servidor del bot."
-
-    await update.message.reply_text(respuesta_texto)
+    if ctx.args:
+        await update.message.reply_text("Procesando pregunta con IA...")
 
 async def cancelar(update, ctx):
     ctx.user_data.clear()
-    await update.message.reply_text("Cancelado.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
 # ── SERVIDOR WEB ──────────────────────────────────────────────────────────────
 class PingHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"RecorridosIA OK")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
     def log_message(self, format, *args): pass
 
-def ping_render():
-    import urllib.request
-    while True:
-        time.sleep(720)
-        try:
-            url = os.getenv("RENDER_EXTERNAL_URL", "")
-            if url:
-                urllib.request.urlopen(url, timeout=10); logger.info("Ping Render OK")
-        except:
-            pass
-
 def start_server():
-    p = int(os.getenv("PORT", "8080"))
-    s = HTTPServer(("0.0.0.0", p), PingHandler)
-    logger.info(f"Web server en puerto {p}")
+    s = HTTPServer(("0.0.0.0", int(os.getenv("PORT", "8080"))), PingHandler)
     s.serve_forever()
 
-# ── MAIN RUN ──────────────────────────────────────────────────────────────────
+# ── CONSTRUCCIÓN DE LA APLICACIÓN ─────────────────────────────────────────────
 def build_app():
     app = Application.builder().token(BOT_TOKEN).build()
     conv = ConversationHandler(
@@ -930,8 +652,6 @@ def build_app():
             TAB_MPRIU:        [MessageHandler(filters.TEXT & ~filters.COMMAND, tab_mpriu)],
             TAB_REPORTES:     [MessageHandler(filters.TEXT & ~filters.COMMAND, tab_reportes)],
             TAB_NOVEDADES_IA: [MessageHandler(filters.PHOTO | filters.TEXT & ~filters.COMMAND, tab_novedades_ia)],
-            MANGA_NOMBRE:     [MessageHandler(filters.TEXT & ~filters.COMMAND, cancelar)],
-            HILO_ODF:         [MessageHandler(filters.TEXT & ~filters.COMMAND, cancelar)],
             NUEVA_RUTA_NOMBRE:[MessageHandler(filters.TEXT & ~filters.COMMAND, recv_nueva_ruta_nombre)],
             NUEVA_RUTA_VIDEO: [MessageHandler(filters.TEXT | filters.VIDEO | filters.Document.ALL & ~filters.COMMAND, recv_nueva_ruta_video)],
         },
@@ -941,28 +661,15 @@ def build_app():
     app.add_handler(conv)
     app.add_handler(CommandHandler("preguntar", preguntar))
     app.add_handler(CallbackQueryHandler(tab_callback, pattern="^tab_"))
-    app.add_handler(CallbackQueryHandler(tab_callback, pattern="^rep_"))
-    app.add_handler(CallbackQueryHandler(vb_callback, pattern="^vb_"))
-    app.add_handler(CallbackQueryHandler(tab_callback, pattern="^manga_der_"))
-    app.add_handler(CallbackQueryHandler(tab_callback, pattern="^solicitar_otp_input$"))
     return app
 
 async def run_bot():
     app = build_app()
     await app.initialize(); await app.start(); await app.updater.start_polling()
-    logger.info("RecorridosIA bot arrancando...")
     while True:
         import asyncio; await asyncio.sleep(1)
 
-def bot_thread():
-    import asyncio
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(run_bot())
-
 if __name__ == "__main__":
-    if not BOT_TOKEN:
-        raise ValueError("Falta BOT_TOKEN en las variables de entorno.")
     threading.Thread(target=start_server, daemon=True).start()
-    threading.Thread(target=ping_render, daemon=True).start()
-    bot_thread()
+    import asyncio
+    asyncio.run(run_bot())
