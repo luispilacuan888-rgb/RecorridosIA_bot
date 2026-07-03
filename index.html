@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SynapseNet AI - Inspeccion en vivo</title>
+<style>
+  body { margin:0; font-family:sans-serif; background:#111; color:#fff; }
+  #video { width:100%; display:block; }
+  #panel { padding:12px; }
+  #estado { font-size:14px; color:#9ad; margin-bottom:8px; }
+  #alerta { padding:10px; border-radius:8px; margin-bottom:8px; display:none; }
+  #alerta.critico { background:#5a1f1f; display:block; }
+  #alerta.atencion { background:#5a4a1f; display:block; }
+  button { width:100%; padding:14px; font-size:16px; border:none; border-radius:8px; margin-top:6px; }
+  #btnIniciar { background:#1d9e75; color:#fff; }
+  #btnFinalizar { background:#993c1d; color:#fff; }
+  input { width:100%; padding:10px; font-size:16px; margin-bottom:8px; box-sizing:border-box; }
+  #contador { font-size:13px; color:#aaa; }
+</style>
+</head>
+<body>
+
+<video id="video" autoplay playsinline muted></video>
+<canvas id="canvas" style="display:none;"></canvas>
+
+<div id="panel">
+  <input id="rutaNombre" placeholder="Nombre de la ruta (ej. GOSSEAL-MACHACHI)">
+  <div id="estado">Esperando iniciar...</div>
+  <div id="alerta"></div>
+  <div id="contador">Novedades detectadas: 0</div>
+  <button id="btnIniciar" onclick="iniciar()">Iniciar inspeccion</button>
+  <button id="btnDetener" onclick="detener()" style="display:none; background:#854f0b;">Detener (ingresar manual en Telegram)</button>
+  <button id="btnContinuar" onclick="continuarInspeccion()" style="display:none; background:#1d9e75;">Continuar inspeccion</button>
+  <button id="btnFinalizar" onclick="finalizar()" style="display:none;">Finalizar y generar Excel</button>
+</div>
+
+<script>
+let ws = null;
+let streamCam = null;
+let ultimaPosicion = null;
+let novedadesCount = 0;
+let rutaActual = "";
+let watchId = null;
+const DISTANCIA_MIN_M = 20;
+
+function distanciaMetros(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+async function iniciar() {
+  rutaActual = document.getElementById("rutaNombre").value.trim().toUpperCase();
+  if (!rutaActual) { alert("Escribe el nombre de la ruta primero"); return; }
+
+  streamCam = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+  document.getElementById("video").srcObject = streamCam;
+
+  const protocolo = location.protocol === "https:" ? "wss:" : "ws:";
+  ws = new WebSocket(protocolo + "//" + location.host + "/ws/" + rutaActual);
+
+  ws.onmessage = (ev) => {
+    const data = JSON.parse(ev.data);
+    mostrarResultado(data);
+  };
+
+  ws.onopen = () => {
+    document.getElementById("estado").textContent = "Conectado. Comparando con la ruta base...";
+    document.getElementById("btnIniciar").style.display = "none";
+    document.getElementById("btnDetener").style.display = "block";
+    document.getElementById("btnFinalizar").style.display = "block";
+    watchId = navigator.geolocation.watchPosition(onPosicion, (err)=>console.error(err), { enableHighAccuracy:true });
+  };
+}
+
+function detener() {
+  if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+  document.getElementById("estado").innerHTML =
+    "Pausado. En Telegram escribe:<br><b>/evento</b><br>para agregar la novedad manual a la ruta <b>" + rutaActual + "</b>.<br>Cuando termines, presiona Continuar aqui.";
+  document.getElementById("btnDetener").style.display = "none";
+  document.getElementById("btnContinuar").style.display = "block";
+}
+
+function continuarInspeccion() {
+  document.getElementById("estado").textContent = "Reanudado. Comparando con la ruta base...";
+  document.getElementById("btnContinuar").style.display = "none";
+  document.getElementById("btnDetener").style.display = "block";
+  ultimaPosicion = null;
+  watchId = navigator.geolocation.watchPosition(onPosicion, (err)=>console.error(err), { enableHighAccuracy:true });
+}
+
+function onPosicion(pos) {
+  const lat = pos.coords.latitude;
+  const lon = pos.coords.longitude;
+
+  if (ultimaPosicion) {
+    const dist = distanciaMetros(ultimaPosicion.lat, ultimaPosicion.lon, lat, lon);
+    if (dist < DISTANCIA_MIN_M) return;
+  }
+  ultimaPosicion = { lat, lon };
+  capturarYEnviar(lat, lon);
+}
+
+function capturarYEnviar(lat, lon) {
+  const video = document.getElementById("video");
+  const canvas = document.getElementById("canvas");
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext("2d").drawImage(video, 0, 0);
+  const frameB64 = canvas.toDataURL("image/jpeg", 0.7).split(",")[1];
+
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ lat, lon, frame_b64: frameB64 }));
+    document.getElementById("estado").textContent = "Comparando punto " + lat.toFixed(5) + ", " + lon.toFixed(5) + "...";
+  }
+}
+
+function mostrarResultado(data) {
+  const alerta = document.getElementById("alerta");
+  if (data.estado === "sin_referencia") {
+    document.getElementById("estado").textContent = "Sin foto base cerca de este punto (fuera de la ruta base)";
+    return;
+  }
+  if (data.clasificacion === "SIN_NOVEDAD") {
+    document.getElementById("estado").textContent = "Sin novedad en este punto";
+    alerta.style.display = "none";
+    return;
+  }
+  novedadesCount++;
+  document.getElementById("contador").textContent = "Novedades detectadas: " + novedadesCount;
+  alerta.className = data.clasificacion === "CRITICO" ? "critico" : "atencion";
+  alerta.textContent = "Novedad #" + data.numero_novedad + " (" + data.clasificacion + "): " + data.motivo;
+}
+
+async function finalizar() {
+  if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+  if (ws) ws.close();
+  if (streamCam) streamCam.getTracks().forEach(t => t.stop());
+  document.getElementById("estado").textContent = "Generando informe...";
+  const resp = await fetch("/finalizar/" + rutaActual, { method: "POST" });
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "REPORTE_" + rutaActual + ".xlsx";
+  a.click();
+  document.getElementById("estado").textContent = "Informe generado y descargado";
+  document.getElementById("btnDetener").style.display = "none";
+  document.getElementById("btnContinuar").style.display = "none";
+  document.getElementById("btnFinalizar").style.display = "none";
+}
+</script>
+
+</body>
+</html>
