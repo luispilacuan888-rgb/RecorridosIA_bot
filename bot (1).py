@@ -1039,6 +1039,26 @@ async def ayuda(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "Variables en Render:"+chr(10)+"BOT_TOKEN / GEMINI_API_KEY"+chr(10)+"MAPILLARY_TOKEN / TOTP_SECRET / DOMINIO_EMAIL")
     return MENU_PRINCIPAL
 
+async def preguntar(update, ctx):
+    pregunta = " ".join(ctx.args).strip()
+    if not pregunta:
+        await update.message.reply_text("Escribe tu pregunta despues del comando.\nEjemplo: /preguntar cual es el remedio para vegetacion sobre fibra")
+        return
+    if not GEMINI_API_KEY:
+        await update.message.reply_text("GEMINI_API_KEY no esta configurada en el servidor.")
+        return
+    await update.message.reply_chat_action("typing")
+    payload = {"contents": [{"parts": [{"text": pregunta}]}]}
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(GEMINI_URL, json=payload)
+            data = resp.json()
+            respuesta_texto = data["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception as e:
+        logger.error("Error en /preguntar: " + str(e))
+        respuesta_texto = "No pude obtener respuesta de Gemini ahorita. Intenta de nuevo."
+    await update.message.reply_text(respuesta_texto)
+
 async def cancelar(update, ctx):
     ctx.user_data.clear()
     await update.message.reply_text("Cancelado.",reply_markup=ReplyKeyboardRemove())
@@ -1093,6 +1113,7 @@ def build_app():
         allow_reentry=True,
     )
     app.add_handler(conv)
+    app.add_handler(CommandHandler("preguntar",preguntar))
     app.add_handler(CallbackQueryHandler(tab_callback,pattern="^tab_"))
     app.add_handler(CallbackQueryHandler(tab_callback,pattern="^rep_"))
     app.add_handler(CallbackQueryHandler(vb_callback,pattern="^vb_"))
