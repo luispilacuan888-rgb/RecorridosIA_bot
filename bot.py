@@ -57,7 +57,7 @@ NOVEDADES_MPRIU = [
 ]
 
 SIN_NOV_MOTIVO  = "NO SE REGISTRAN NOVEDADES DURANTE LA INSPECCI\u00d3N."
-SIN_NOV_REMEDIO = "NO SE ENCUENTRAN NOVEDADES QUE SIGNIFIQUEN RIESGOS EN EL CABLE DE LA RED INTERURBANO."
+SIN_NOV_REMEDIO = "NO ENCUENTRAN NOVEDADES QUE SIGNIFIQUEN RIESGOS EN EL CABLE DE LA RED INTERURBANO."
 
 REMEDIOS = {
     "HERRAJES EN MAL ESTADO.": "REALIZAR EL REEMPLAZO INMEDIATO DEL HERRAJE AFECTADO, GARANTIZANDO LA CORRECTA SUJECI\u00d3N DEL CABLE Y LA ESTABILIDAD MEC\u00c1NICA DEL TENDIDO.",
@@ -413,18 +413,18 @@ def nombre_archivo(datos):
     ruta = datos["recorrido"]["nombre_ruta"].split()[0].replace("/", "-") if datos["recorrido"]["nombre_ruta"] else "RUTA"
     return "FOR_FO_02_"+ruta+"_"+datetime.now().strftime("%Y%m%d_%H%M")+".xlsx"
 
-# ── AUTENTICACION CORREGIDA CON BOTÓN INLINE ──────────────────────────────────
+# ── AUTENTICACION CON TEXTO IDÉNTICO A LA CAPTURA DE PANTALLA ────────────────
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id in USUARIOS_AUTENTICADOS:
         return await menu_principal(update, ctx)
     
-    # Se genera el botón Inline de seguridad para ingresar el Token
+    # Teclado inline exactamente con el diseño solicitado
     teclado_otp = InlineKeyboardMarkup([[InlineKeyboardButton("🔑 Ingresar Token", callback_data="solicitar_otp_input")]])
     
+    # Mensaje idéntico al de la foto
     await update.message.reply_text(
-        "🔓 <b>RecorridosIA — Sistema de Seguridad</b>\n\nPor seguridad ingrese el token OTP asignado por su administrador:",
-        reply_markup=teclado_otp,
-        parse_mode="HTML"
+        "Por seguridad ingrese el token OTP asignado por su administrador:",
+        reply_markup=teclado_otp
     )
     return ESPERANDO_TOTP
 
@@ -563,7 +563,7 @@ async def tab_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer(); data = query.data
     volver = InlineKeyboardMarkup([[InlineKeyboardButton("Volver al menú", callback_data="tab_menu")]])
     
-    # Capturador inline para responder al botón de seguridad "Ingresar Token"
+    # Captura inline del botón para que pida el Token tal cual lo requieres
     if data == "solicitar_otp_input":
         await query.message.reply_text("Ingrese el código OTP de 6 dígitos:")
         return ESPERANDO_TOTP
@@ -944,7 +944,6 @@ def build_app():
     app.add_handler(CallbackQueryHandler(tab_callback, pattern="^rep_"))
     app.add_handler(CallbackQueryHandler(vb_callback, pattern="^vb_"))
     app.add_handler(CallbackQueryHandler(tab_callback, pattern="^manga_der_"))
-    # Handler para capturar la interacción del botón inline del OTP
     app.add_handler(CallbackQueryHandler(tab_callback, pattern="^solicitar_otp_input$"))
     return app
 
