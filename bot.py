@@ -83,7 +83,7 @@ REMEDIOS = {
     "POZO SIN TAPA O EN MAL ESTADO.": "SOLICITAR LA EJECUCI\u00d3N DE TRABAJOS DE OBRA CIVIL PARA SU INSTALACI\u00d3N O CORRECCI\u00d3N.",
     "REPINTADO DE POZO.": "REALIZAR EL PINTADO DEL POZO TELCONET CON EL C\u00d3DIGO ASIGNADO POR GIS.",
     "REPINTADO DE POSTE.": "REALIZAR EL PINTADO DEL POSTE TELCONET CON EL C\u00d3DIGO ASIGNADO POR GIS.",
-    "ELEMENTOS SIN ETIQUETAS ACR\u00cdLICAS.": "VERIFICAR, COLOCAR ETIQUETA ACR\u00cdLICA Y ETIQUETAR CON EL C\u00d3DIGO DE RUTA.",
+    "ELEMENTOS SIN ETIQUETAS ACR\u00cdLICAS.": "VERIFICAR, COLOCAR ETIQUETA ACR\u00CTLICA Y ETIQUETAR CON EL C\u00d3DIGO DE RUTA.",
     "RIESGO DE DERRUMBE O DESLAVE.": "DOCUMENTAR EL RIESGO Y SOLICITAR AL COORDINADOR LA REUBICACI\u00d3N DEL RECORRIDO DEL CABLE.",
     "RIESGO DE INUNDACIONES.": "DOCUMENTAR EL RIESGO Y SOLICITAR AL COORDINADOR LA REUBICACI\u00d3N DEL RECORRIDO DEL CABLE.",
     "RIESGO DE INCENDIO.": "DOCUMENTAR EL RIESGO Y SOLICITAR AL COORDINADOR LA REUBICACI\u00d3N DEL RECORRIDO DEL CABLE.",
@@ -159,26 +159,6 @@ def _insertar_logo_centrado(ws, fila, col_letra):
         ws.add_image(img, f"{col_letra}{fila}")
     except Exception as e:
         logger.error("Error logo: " + str(e))
-
-async def analizar_con_gemini_ia(img_bytes):
-    if not GEMINI_API_KEY:
-        return None
-    img_b64 = base64.b64encode(img_bytes).decode()
-    prompt = "Analiza esta imagen de inspeccion de fibra optica. Si hay problema responde JSON: {\"tiene_novedad\": true, \"motivo\": \"NOMBRE EN MAYUSCULAS\", \"coordenadas\": \"\"}. Si todo bien: {\"tiene_novedad\": false, \"motivo\": \"\", \"coordenadas\": \"\"}. Solo JSON."
-    payload = {"contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}]}]}
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(GEMINI_URL, json=payload)
-            texto = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-            texto = texto.replace("```json","").replace("```","").strip()
-            r = json.loads(texto)
-            if not r.get("tiene_novedad"):
-                return None
-            motivo = r.get("motivo","").upper()
-            return {"motivo": motivo, "remedio": REMEDIOS.get(motivo, "DOCUMENTAR Y REPORTAR AL COORDINADOR."), "coordenadas": r.get("coordenadas",""), "tarea_pendiente": "", "foto_antes": img_bytes, "foto_despues": None}
-    except Exception as e:
-        logger.error("Gemini error: " + str(e))
-        return None
 
 def generar_excel_bytes(datos):
     wb = Workbook()
@@ -295,19 +275,19 @@ def nombre_archivo(datos):
     ruta = datos["recorrido"]["nombre_ruta"].split()[0].replace("/", "-") if datos["recorrido"]["nombre_ruta"] else "RUTA"
     return "FOR_FO_02_"+ruta+"_"+datetime.now().strftime("%Y%m%d_%H%M")+".xlsx"
 
-# ── AUTENTICACIÓN ADAPTADA A TU NUEVA FOTO (MENSAJE + TECLADO NORMAL) ─────────
+# ── FORMATO DE AUTENTICACIÓN FIEL A LA FOTO (MENSAJE + TECLADO INFERIOR) ──
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id in USUARIOS_AUTENTICADOS:
         return await menu_principal(update, ctx)
     
-    # Teclado en la parte inferior exactamente como se ve en la captura
+    # Teclado en la sección inferior
     teclado_otp = ReplyKeyboardMarkup(
         [[ "🔑 Ingresar Token" ]], 
         resize_keyboard=True, 
         one_time_keyboard=True
     )
     
-    # Mensaje formateado idéntico al recuadro de la foto
+    # Recuadro gris idéntico al de tu captura
     mensaje_seguridad = (
         "<b>🛡️ Sistema de Seguridad</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
@@ -324,7 +304,6 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def verificar_totp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.strip()
     
-    # Si presiona el botón del teclado, le pedimos explícitamente el código
     if texto == "🔑 Ingresar Token":
         await update.message.reply_text("🔢 Por favor, digite el código OTP de 6 dígitos:")
         return ESPERANDO_TOTP
@@ -354,7 +333,7 @@ async def menu_principal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await msg.reply_text("RecorridosIA — Menú principal", reply_markup=ReplyKeyboardMarkup(teclado, resize_keyboard=True))
     return MENU_PRINCIPAL
 
-# ── FLUJO INTERURBANO RECORRIDO ──────────────────────────────────────────────
+# ── FLUJO ORIGINAL INALTERADO ────────────────────────────────────────────────
 async def nuevo_recorrido(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in USUARIOS_AUTENTICADOS:
         return await start(update, ctx)
@@ -408,7 +387,6 @@ async def recv_distancia(update, ctx):
     ctx.user_data["datos"]["recorrido"]["hora_inicio"] = datetime.now().strftime("%H:%M:%S")
     return await tab_menu(update, ctx)
 
-# ── PESTAÑAS DINÁMICAS DEL INFORME ──────────────────────────────────────────
 async def tab_menu(update, ctx):
     datos = ctx.user_data["datos"]
     r = datos["recorrido"]
@@ -578,7 +556,7 @@ async def enviar_excel(update, ctx):
         logger.error(str(e))
     return await menu_principal(update, ctx)
 
-# ── NUEVA RUTA BASE ───────────────────────────────────────────────────────────
+# ── NUEVA RUTA BASE / OTROS ──────────────────────────────────────────────────
 async def nueva_ruta(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Nueva Ruta Base\n\nNombre de la ruta:", reply_markup=ReplyKeyboardRemove())
     return NUEVA_RUTA_NOMBRE
@@ -597,17 +575,44 @@ async def mis_rutas(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🗺️ No hay rutas base guardadas en el clúster.")
 
 async def ayuda(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("💡 Use /preguntar [texto] para dudas en campo.")
+    await update.message.reply_text("💡 Use /preguntar [texto] para dudas en campo con Gemini IA.")
 
+# ── EXCLUSIVO: INTERACCIÓN CON GEMINI MEDIANTE /PREGUNTAR ─────────────────────
 async def preguntar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if ctx.args:
-        await update.message.reply_text("Procesando pregunta con IA...")
+    if not ctx.args:
+        await update.message.reply_text("❌ Por favor escribe tu consulta después del comando.\nEjemplo: `/preguntar cómo identifico un herraje roto?`", parse_mode="Markdown")
+        return
+
+    pregunta_usuario = " ".join(ctx.args)
+    await update.message.reply_text("🤖 <i>Consultando con Gemini IA en la base de Telconet...</i>", parse_mode="HTML")
+    
+    if not GEMINI_API_KEY:
+        await update.message.reply_text("⚠️ Llave de API de Gemini no configurada.")
+        return
+
+    payload = {
+        "contents": [{
+            "parts": [{
+                "text": f"Eres un experto senior en redes de fibra óptica e infraestructura interurbana. Responde de forma técnica pero resumida en español a la siguiente consulta de un técnico en campo: {pregunta_usuario}"
+            }]
+        }]
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(GEMINI_URL, json=payload)
+            data = resp.json()
+            respuesta_ia = data["candidates"][0]["content"]["parts"][0]["text"]
+            await update.message.reply_text(f"🤖 <b>Respuesta de Gemini IA:</b>\n\n{respuesta_ia}", parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Error en comando preguntar: {str(e)}")
+        await update.message.reply_text("❌ Hubo un inconveniente al conectar con el motor de IA. Intenta de nuevo en unos momentos.")
 
 async def cancelar(update, ctx):
     ctx.user_data.clear()
     return ConversationHandler.END
 
-# ── SERVIDOR WEB ──────────────────────────────────────────────────────────────
+# ── SERVIDOR WEB DE CONTROL ──────────────────────────────────────────────────
 class PingHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
@@ -617,7 +622,7 @@ def start_server():
     s = HTTPServer(("0.0.0.0", int(os.getenv("PORT", "8080"))), PingHandler)
     s.serve_forever()
 
-# ── CONSTRUCCIÓN DE LA APLICACIÓN ─────────────────────────────────────────────
+# ── CONSTRUCCIÓN DE MANEJADORES DE LA APP ─────────────────────────────────────
 def build_app():
     app = Application.builder().token(BOT_TOKEN).build()
     conv = ConversationHandler(
