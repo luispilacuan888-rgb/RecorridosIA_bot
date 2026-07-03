@@ -366,10 +366,10 @@ def generar_excel_bytes(datos):
     for i in range(max(len(HERR), len(EQUI), len(MATE))):
         ws5.row_dimensions[f5].height = 20
         if i < len(HERR):
-            n = HERR[i]; info = ch.get(n, {"cantidad": 0, "obs": "NINGUNA"})
+            n = HERR[i]; info = ch.get(n, {"cantidad": 0, "obs": "BUEN ESTADO" if cant > 0 else "NINGUNA"})
             _val(ws5, f5, 2, 2, n); _val(ws5, f5, 3, 3, info["cantidad"]); _val(ws5, f5, 4, 4, info["obs"])
         if i < len(EQUI):
-            n = EQUI[i]; info = ce.get(n, {"cantidad": 0, "obs": "NINGUNA"})
+            n = EQUI[i]; info = ce.get(n, {"cantidad": 0, "obs": "BUEN ESTADO" if cant > 0 else "NINGUNA"})
             _val(ws5, f5, 5, 5, n); _val(ws5, f5, 6, 6, info["cantidad"]); _val(ws5, f5, 7, 7, info["obs"])
         if i == 0:
             _val(ws5, f5, 8, 8, "BUENO")
@@ -413,12 +413,18 @@ def nombre_archivo(datos):
     ruta = datos["recorrido"]["nombre_ruta"].split()[0].replace("/", "-") if datos["recorrido"]["nombre_ruta"] else "RUTA"
     return "FOR_FO_02_"+ruta+"_"+datetime.now().strftime("%Y%m%d_%H%M")+".xlsx"
 
-# ── AUTENTICACION ─────────────────────────────────────────────────────────────
+# ── AUTENTICACION CORREGIDA CON BOTÓN INLINE ──────────────────────────────────
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id in USUARIOS_AUTENTICADOS:
         return await menu_principal(update, ctx)
+    
+    # Se genera el botón Inline de seguridad para ingresar el Token
+    teclado_otp = InlineKeyboardMarkup([[InlineKeyboardButton("🔑 Ingresar Token", callback_data="solicitar_otp_input")]])
+    
     await update.message.reply_text(
-        "RecorridosIA — Sistema Inteligente\n\nPor seguridad ingrese el token OTP asignado por su administrador:"
+        "🔓 <b>RecorridosIA — Sistema de Seguridad</b>\n\nPor seguridad ingrese el token OTP asignado por su administrador:",
+        reply_markup=teclado_otp,
+        parse_mode="HTML"
     )
     return ESPERANDO_TOTP
 
@@ -556,6 +562,12 @@ async def tab_menu(update, ctx):
 async def tab_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer(); data = query.data
     volver = InlineKeyboardMarkup([[InlineKeyboardButton("Volver al menú", callback_data="tab_menu")]])
+    
+    # Capturador inline para responder al botón de seguridad "Ingresar Token"
+    if data == "solicitar_otp_input":
+        await query.message.reply_text("Ingrese el código OTP de 6 dígitos:")
+        return ESPERANDO_TOTP
+        
     if data == "tab_generar":
         return await enviar_excel(update, ctx)
     elif data == "tab_menu":
@@ -820,19 +832,15 @@ async def ayuda(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ── COMANDO PREGUNTAR CORREGIDO ──────────────────────────────────────────────
 async def preguntar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    # Validamos si se proporcionó una pregunta después del comando
     if not ctx.args:
         await update.message.reply_text("Por favor, escribe una pregunta después del comando.\nEjemplo: <code>/preguntar qué es un OTDR</code>", parse_mode="HTML")
         return
 
     prompt = " ".join(ctx.args).strip()
-    
-    # Validamos que la API key esté cargada en las variables de entorno
     if not GEMINI_API_KEY:
         await update.message.reply_text("Error: La API Key de Gemini no está configurada en el servidor.")
         return
 
-    # Construimos el payload HTTP oficial para Gemini 1.5 Flash
     payload = {
         "contents": [
             {
@@ -844,21 +852,15 @@ async def preguntar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     }
 
     try:
-        # Enviamos indicación visual al usuario en Telegram
         await ctx.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-        
-        # Realizamos la llamada HTTP asíncrona hacia Google AI Studio
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(GEMINI_URL, json=payload)
-            
-            # Verificamos si la respuesta fue exitosa
             if resp.status_code == 200:
                 data = resp.json()
                 respuesta_texto = data["candidates"][0]["content"]["parts"][0]["text"]
             else:
                 logger.error(f"Error HTTP de Google: {resp.status_code} - {resp.text}")
                 respuesta_texto = "No pude obtener respuesta de Gemini ahorita. La API Key podría estar sin cuota o bloqueada."
-                
     except Exception as e:
         logger.error("Error en /preguntar: " + str(e))
         respuesta_texto = "Ocurrió un error inesperado al procesar tu pregunta en el servidor del bot."
@@ -928,7 +930,7 @@ def build_app():
             TAB_MPRIU:        [MessageHandler(filters.TEXT & ~filters.COMMAND, tab_mpriu)],
             TAB_REPORTES:     [MessageHandler(filters.TEXT & ~filters.COMMAND, tab_reportes)],
             TAB_NOVEDADES_IA: [MessageHandler(filters.PHOTO | filters.TEXT & ~filters.COMMAND, tab_novedades_ia)],
-            MANGA_NOMBRE:     [MessageHandler(filters.TEXT & ~filters.COMMAND, cancelar)], # Marcadores por defecto
+            MANGA_NOMBRE:     [MessageHandler(filters.TEXT & ~filters.COMMAND, cancelar)],
             HILO_ODF:         [MessageHandler(filters.TEXT & ~filters.COMMAND, cancelar)],
             NUEVA_RUTA_NOMBRE:[MessageHandler(filters.TEXT & ~filters.COMMAND, recv_nueva_ruta_nombre)],
             NUEVA_RUTA_VIDEO: [MessageHandler(filters.TEXT | filters.VIDEO | filters.Document.ALL & ~filters.COMMAND, recv_nueva_ruta_video)],
@@ -942,6 +944,8 @@ def build_app():
     app.add_handler(CallbackQueryHandler(tab_callback, pattern="^rep_"))
     app.add_handler(CallbackQueryHandler(vb_callback, pattern="^vb_"))
     app.add_handler(CallbackQueryHandler(tab_callback, pattern="^manga_der_"))
+    # Handler para capturar la interacción del botón inline del OTP
+    app.add_handler(CallbackQueryHandler(tab_callback, pattern="^solicitar_otp_input$"))
     return app
 
 async def run_bot():
