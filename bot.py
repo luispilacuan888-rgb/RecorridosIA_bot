@@ -15,16 +15,16 @@ GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY")
 MAPILLARY_TOKEN = os.getenv("MAPILLARY_TOKEN")
 TOTP_SECRET     = os.getenv("TOTP_SECRET")
 DOMINIO         = os.getenv("DOMINIO_EMAIL", "telconet.ec")
-GEMINI_URL      = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=" + (GEMINI_API_KEY or "")
+GEMINI_URL      = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=" + (GEMINI_API_KEY or "")
 
 USUARIOS_AUTENTICADOS = set()
-RECORRIDOS_ACTIVOS = {}  # rutas de inspeccion en vivo (app web), compartido con /evento del bot
-RUTAS_GUARDADAS = {}
+RUTAS_GUARDADAS = {} 
 
 # MODO PRUEBA: solo se generan REPORTES_DE_RECORRIDOS y FOTOS_ANEXAS_AL_REPORTE.
 # Cuando estas 2 pestanas esten validadas, cambiar a True para reactivar
 # MANGAS, INVENTARIO DE HILOS EN NODO, Checklist CIU y Checklists MPRIU.
 GENERAR_HOJAS_EXTRA = False
+
 
 (ESPERANDO_TOTP, MENU_PRINCIPAL, NOMBRE_RUTA, CODIGO_CUADRILLA, NODO_INICIAL, NODO_FINAL,
  LIDER, AYUDANTE, COORDINADOR, PLACA, DISTANCIA,
@@ -40,8 +40,7 @@ GENERAR_HOJAS_EXTRA = False
  GENERAR_HORA_FIN, GENERAR_NOVEDADES,
  TAB_MENU, TAB_CIU_HERR, TAB_CIU_EQUI, TAB_CIU_MATE,
  TAB_MPRIU, TAB_REPORTES, TAB_NOVEDADES_IA,
- VIDEO_BASE_NOMBRE, VIDEO_BASE_UPLOAD,
- EVENTO_RUTA, EVENTO_MOTIVO, EVENTO_COORD, EVENTO_FOTO) = range(56)
+ VIDEO_BASE_NOMBRE, VIDEO_BASE_UPLOAD) = range(52)
 
 NOVEDADES_MPRIU = [
     "HERRAJES EN MAL ESTADO.", "FALTA DE HERRAJES.", "POSTES EN MAL ESTADO.",
@@ -98,7 +97,7 @@ HERR = ["Cintur\u00f3n y Linea de Vida","Casco","Escalera de 24 pies","Escalera 
 EQUI = ["Fusionadora","Cortadora de fibra","Bobina de lanzamiento","OTDR con cargador","Llave Acsys","GPS","Inversor","Etiquetadora"]
 MATE = ["Fibra 48h (500mt)","Mangas de 48h y/o 144h (2 m\u00ednimo)","Rollo de cinta Eriband 3/4\"","Hebillas para cinta Eriband 3/4\"","Hojas de sierra","Patchcord de fibra","Adaptadores (Simplex-Duplex)","Paquetes de amarras","Mesas pl\u00e1sticas","Sillas pl\u00e1sticas","Cuchillos","Poleas","Sogas de nylon medianas","Sogas de nylon gruesas","Repelente contra insectos","Repelente contra abejas y avispas"]
 
-LOGO_B64 = "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"
+LOGO_B64 = "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"
 
 AZUL="0000FF"; GRIS="969696"; GRIS2="D9D9D9"; GRIS3="C0C0C0"
 AZUL2="0070C0"; VERDE="00B050"; ROJO="FF0000"; BLANCO="FFFFFF"
@@ -130,7 +129,11 @@ async def analizar_imagen(img_bytes):
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(GEMINI_URL, json=payload)
-            texto = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+            data = resp.json()
+            if "candidates" not in data:
+                logger.error("Gemini respondio sin 'candidates': " + json.dumps(data)[:500])
+                return None
+            texto = data["candidates"][0]["content"]["parts"][0]["text"]
             texto = texto.replace("```json","").replace("```","").strip()
             r = json.loads(texto)
             if not r.get("tiene_novedad"):
@@ -140,49 +143,6 @@ async def analizar_imagen(img_bytes):
     except Exception as e:
         logger.error("Gemini error: " + str(e))
         return None
-
-async def buscar_foto_base(lat: float, lon: float, radio_m: int = 15):
-    """Busca en Mapillary la foto base mas cercana a una coordenada GPS."""
-    if not MAPILLARY_TOKEN:
-        logger.warning("MAPILLARY_TOKEN no configurado")
-        return None
-    url = "https://graph.mapillary.com/images"
-    params = {"access_token": MAPILLARY_TOKEN, "fields": "id,thumb_1024_url,geometry", "closeto": f"{lon},{lat}", "radius": radio_m}
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(url, params=params)
-            data = resp.json().get("data", [])
-            if not data:
-                return None
-            img = data[0]
-            img_resp = await client.get(img["thumb_1024_url"])
-            return {"id": img["id"], "bytes": img_resp.content}
-    except Exception as e:
-        logger.error("Error buscando foto base en Mapillary: " + str(e))
-        return None
-
-async def comparar_con_gemini_2fotos(foto_base_bytes, foto_nueva_bytes):
-    """Compara la foto del video base contra la foto actual del mismo punto GPS."""
-    prompt = ('Compara estas dos fotos del mismo punto de una ruta de fibra optica. '
-              'Foto 1 = estado BASE (referencia). Foto 2 = estado ACTUAL. Responde SOLO JSON: '
-              '{"clasificacion": "SIN_NOVEDAD|ATENCION|CRITICO", "motivo": "texto en MAYUSCULAS o vacio"}')
-    payload = {"contents": [{"parts": [
-        {"text": prompt},
-        {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(foto_base_bytes).decode()}},
-        {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(foto_nueva_bytes).decode()}},
-    ]}]}
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(GEMINI_URL, json=payload)
-            texto = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-            texto = texto.replace("```json", "").replace("```", "").strip()
-            return json.loads(texto)
-    except Exception as e:
-        logger.error("Error comparando con Gemini: " + str(e))
-        return {"clasificacion": "SIN_NOVEDAD", "motivo": ""}
-
-def link_mapillary(image_id, lat, lon):
-    return f"https://www.mapillary.com/app/?pKey={image_id}&focus=photo&lat={lat}&lng={lon}&z=17"
 
 # ── EXCEL ─────────────────────────────────────────────────────────────────────
 def _logo_image():
@@ -196,50 +156,6 @@ def _logo_image():
     except Exception as e:
         logger.warning("No se pudo cargar el logo: " + str(e))
         return None
-
-def estampar_foto(img_bytes, lat=None, lon=None, ubicacion="", codigo_ruta=""):
-    """Superpone el logo de Telconet arriba y fecha/hora + coordenadas + ubicacion +
-    codigo de ruta abajo (franja oscura semi-transparente), estilo GPS Map Camera."""
-    from PIL import Image, ImageDraw, ImageFont
-    try:
-        img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
-        w, h = img.size
-        overlay = Image.new("RGBA", img.size, (0,0,0,0))
-        draw = ImageDraw.Draw(overlay)
-        try:
-            logo = Image.open(io.BytesIO(base64.b64decode(LOGO_B64))).convert("RGBA")
-            logo_w = int(w * 0.32)
-            logo_h = int(logo.height * (logo_w / logo.width))
-            logo = logo.resize((logo_w, logo_h))
-            alpha = logo.split()[3].point(lambda p: int(p*0.75))
-            logo.putalpha(alpha)
-            overlay.paste(logo, ((w - logo_w)//2, int(h * 0.04)), logo)
-        except Exception as e:
-            logger.warning("No se pudo pegar el logo en la foto: " + str(e))
-        ahora = datetime.now()
-        lineas = [ahora.strftime("%d %b %Y %H:%M:%S")]
-        if lat is not None and lon is not None:
-            ns = "S" if lat < 0 else "N"; ew = "W" if lon < 0 else "E"
-            lineas.append(f"{abs(lat):.4f}{ns} {abs(lon):.4f}{ew}")
-        if ubicacion: lineas.append(ubicacion)
-        if codigo_ruta: lineas.append(codigo_ruta)
-        size_fuente = max(14, int(w * 0.028))
-        try:
-            fuente = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size_fuente)
-        except Exception:
-            fuente = ImageFont.load_default()
-        pad = int(w * 0.02); alto_linea = int(size_fuente * 1.35)
-        alto_franja = pad*2 + alto_linea*len(lineas)
-        draw.rectangle([0, h-alto_franja, w, h], fill=(0,0,0,140))
-        y = h - alto_franja + pad
-        for linea in lineas:
-            draw.text((pad, y), linea, font=fuente, fill=(255,255,255,255)); y += alto_linea
-        resultado = Image.alpha_composite(img, overlay).convert("RGB")
-        buf = io.BytesIO(); resultado.save(buf, format="JPEG", quality=88)
-        return buf.getvalue()
-    except Exception as e:
-        logger.warning("No se pudo estampar la foto: " + str(e))
-        return img_bytes
 
 def _insertar_foto_celda(ws, fila, col, img_bytes, ancho_px=255, alto_px=400):
     """Inserta una foto (bytes JPEG/PNG) ajustada dentro de la celda foto, con pequeño margen."""
@@ -500,27 +416,18 @@ def generar_excel(datos):
     f2=10
     for n_idx in range(1, 21):
         nov = novedades[n_idx-1] if n_idx <= len(novedades) else None
-        es_sin_novedad = nov and nov.get("motivo","") == SIN_NOV_MOTIVO
         ws2.merge_cells(start_row=f2, start_column=2, end_row=f2+1, end_column=2)
         for fr in (f2, f2+1): ws2.cell(fr,2).border = _BORDE_GRUESO
         c_lbl = ws2.cell(f2,2,"NOVEDAD # "+str(n_idx))
         c_lbl.font = Font(bold=True, name="Calibri", size=11, color="000000")
         c_lbl.alignment = _Al(horizontal="center", vertical="center", wrap_text=True)
-        if es_sin_novedad:
-            ws2.merge_cells(start_row=f2, start_column=3, end_row=f2, end_column=5)
-            _hdr(ws2, f2, 3, 5, "EN ESTE PUNTO LA RUTA EST\u00c1 SIN NOVEDAD", borde=_BORDE_GRUESO)
-            f2+=1; ws2.row_dimensions[f2].height=315
-            ws2.merge_cells(start_row=f2, start_column=3, end_row=f2, end_column=5)
-            _val(ws2, f2, 3, 5, "", borde=_BORDE_GRUESO)
-            _insertar_foto_celda(ws2, f2, 3, nov.get("foto_antes"), ancho_px=630, alto_px=400)
-        else:
-            _hdr(ws2, f2, 3, 3, "ANTES DEL MANTENIMIENTO", borde=_BORDE_GRUESO)
-            _hdr(ws2, f2, 4, 5, "DESPU\u00c9S DEL MANTENIMIENTO", borde=_BORDE_GRUESO)
-            f2+=1; ws2.row_dimensions[f2].height=315
-            _val(ws2, f2, 3, 3, "", borde=_BORDE_GRUESO); _val(ws2, f2, 4, 5, "", borde=_BORDE_GRUESO)
-            if nov:
-                _insertar_foto_celda(ws2, f2, 3, nov.get("foto_antes"))
-                _insertar_foto_celda(ws2, f2, 4, nov.get("foto_despues"))
+        _hdr(ws2, f2, 3, 3, "ANTES DEL MANTENIMIENTO", borde=_BORDE_GRUESO)
+        _hdr(ws2, f2, 4, 5, "DESPU\u00c9S DEL MANTENIMIENTO", borde=_BORDE_GRUESO)
+        f2+=1; ws2.row_dimensions[f2].height=315
+        _val(ws2, f2, 3, 3, "", borde=_BORDE_GRUESO); _val(ws2, f2, 4, 5, "", borde=_BORDE_GRUESO)
+        if nov:
+            _insertar_foto_celda(ws2, f2, 3, nov.get("foto_antes"))
+            _insertar_foto_celda(ws2, f2, 4, nov.get("foto_despues"))
         f2+=2
 
     ws2.merge_cells(start_row=f2, start_column=2, end_row=f2+1, end_column=2)
@@ -1137,163 +1044,16 @@ async def ayuda(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "Variables en Render:"+chr(10)+"BOT_TOKEN / GEMINI_API_KEY"+chr(10)+"MAPILLARY_TOKEN / TOTP_SECRET / DOMINIO_EMAIL")
     return MENU_PRINCIPAL
 
-async def preguntar(update, ctx):
-    pregunta = " ".join(ctx.args).strip()
-    if not pregunta:
-        await update.message.reply_text("Escribe tu pregunta despues del comando.\nEjemplo: /preguntar cual es el remedio para vegetacion sobre fibra")
-        return
-    if not GEMINI_API_KEY:
-        await update.message.reply_text("GEMINI_API_KEY no esta configurada en el servidor.")
-        return
-    await update.message.reply_chat_action("typing")
-    payload = {"contents": [{"parts": [{"text": pregunta}]}]}
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(GEMINI_URL, json=payload)
-            data = resp.json()
-            respuesta_texto = data["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception as e:
-        logger.error("Error en /preguntar: " + str(e))
-        respuesta_texto = "No pude obtener respuesta de Gemini ahorita. Intenta de nuevo."
-    await update.message.reply_text(respuesta_texto)
-
-# ── EVENTO MANUAL — agrega una novedad a una ruta activa de la app web ─────────
-async def evento_inicio(update, ctx):
-    if not RECORRIDOS_ACTIVOS:
-        await update.message.reply_text("No hay ninguna ruta en inspeccion en vivo ahorita.\nAbre la app web y presiona Detener antes de usar /evento.")
-        return ConversationHandler.END
-    rutas = list(RECORRIDOS_ACTIVOS.keys())
-    if len(rutas) == 1:
-        ctx.user_data["evento_ruta"] = rutas[0]
-        await update.message.reply_text("Agregando novedad manual a: "+rutas[0]+chr(10)+chr(10)+"Escribe el motivo (ej. VEGETACION SOBRE FIBRA/MANGA.):")
-        return EVENTO_MOTIVO
-    teclado=[[r] for r in rutas]
-    await update.message.reply_text("Que ruta activa?",reply_markup=ReplyKeyboardMarkup(teclado,resize_keyboard=True,one_time_keyboard=True))
-    return EVENTO_RUTA
-
-async def evento_ruta(update, ctx):
-    ruta = update.message.text.strip()
-    if ruta not in RECORRIDOS_ACTIVOS:
-        await update.message.reply_text("Esa ruta no esta activa. Cancelado."); return ConversationHandler.END
-    ctx.user_data["evento_ruta"] = ruta
-    await update.message.reply_text("Escribe el motivo (ej. VEGETACION SOBRE FIBRA/MANGA.):",reply_markup=ReplyKeyboardRemove())
-    return EVENTO_MOTIVO
-
-async def evento_motivo(update, ctx):
-    ctx.user_data["evento_motivo"] = update.message.text.strip().upper()
-    await update.message.reply_text("Coordenadas en formato lat,lon (o escribe - si no tienes):")
-    return EVENTO_COORD
-
-async def evento_coord(update, ctx):
-    txt = update.message.text.strip()
-    ctx.user_data["evento_coord"] = "" if txt=="-" else txt
-    await update.message.reply_text("Envia una foto de la novedad (o escribe - para omitir):")
-    return EVENTO_FOTO
-
-async def evento_foto(update, ctx):
-    ruta = ctx.user_data.get("evento_ruta")
-    if ruta not in RECORRIDOS_ACTIVOS:
-        await update.message.reply_text("Esa ruta ya no esta activa. Cancelado."); return ConversationHandler.END
-    foto_bytes = None
-    if update.message.photo:
-        f = await update.message.photo[-1].get_file()
-        foto_bytes = bytes(await f.download_as_bytearray())
-        _lat=_lon=None
-        _coord = ctx.user_data.get("evento_coord","")
-        if "," in _coord:
-            try:
-                _lat,_lon = [float(x.strip()) for x in _coord.split(",")[:2]]
-            except Exception:
-                _lat=_lon=None
-        foto_bytes = estampar_foto(foto_bytes, lat=_lat, lon=_lon, ubicacion="", codigo_ruta=ruta)
-    novedades = RECORRIDOS_ACTIVOS[ruta]["novedades"]
-    novedad = {
-        "numero": len(novedades)+1,
-        "motivo": ctx.user_data.get("evento_motivo",""),
-        "clasificacion": "MANUAL",
-        "coordenadas": ctx.user_data.get("evento_coord",""),
-        "foto_antes": foto_bytes, "foto_despues": None,
-        "link_munequito": "", "hora": datetime.now().strftime("%H:%M:%S"),
-    }
-    novedades.append(novedad)
-    await update.message.reply_text(
-        "✅ Novedad #"+str(novedad["numero"])+" agregada manualmente a "+ruta+chr(10)+
-        "Motivo: "+novedad["motivo"]+chr(10)+chr(10)+
-        "Cuando termines, vuelve a la app web y presiona Continuar para seguir la inspeccion automatica.")
-    ctx.user_data.pop("evento_ruta",None); ctx.user_data.pop("evento_motivo",None); ctx.user_data.pop("evento_coord",None)
-    return ConversationHandler.END
-
 async def cancelar(update, ctx):
     ctx.user_data.clear()
     await update.message.reply_text("Cancelado.",reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
 # ── SERVIDOR WEB ──────────────────────────────────────────────────────────────
-# ── SERVIDOR WEB (FastAPI: ping + app de inspeccion en vivo) ───────────────────
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import StreamingResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
-import uvicorn
-
-fastapi_app = FastAPI(title="RecorridosIA")
-
-if os.path.isdir("static"):
-    fastapi_app.mount("/static", StaticFiles(directory="static"), name="static")
-
-@fastapi_app.get("/")
-async def ping():
-    return HTMLResponse("RecorridosIA OK")
-
-@fastapi_app.get("/inspeccion")
-async def pagina_inspeccion():
-    with open("static/index.html", encoding="utf-8") as f:
-        return HTMLResponse(f.read())
-
-@fastapi_app.websocket("/ws/{ruta_nombre}")
-async def ws_inspeccion(websocket: WebSocket, ruta_nombre: str):
-    await websocket.accept()
-    if ruta_nombre not in RECORRIDOS_ACTIVOS:
-        RECORRIDOS_ACTIVOS[ruta_nombre] = {"novedades": [], "inicio": datetime.now().strftime("%d/%m/%Y %H:%M:%S")}
-    try:
-        while True:
-            mensaje = await websocket.receive_json()
-            lat, lon = mensaje["lat"], mensaje["lon"]
-            frame_bytes = base64.b64decode(mensaje["frame_b64"])
-            frame_bytes = estampar_foto(frame_bytes, lat=lat, lon=lon, ubicacion="", codigo_ruta=ruta_nombre)
-            base = await buscar_foto_base(lat, lon)
-            if not base:
-                await websocket.send_json({"estado": "sin_referencia", "lat": lat, "lon": lon}); continue
-            resultado = await comparar_con_gemini_2fotos(base["bytes"], frame_bytes)
-            clasificacion = resultado.get("clasificacion", "SIN_NOVEDAD")
-            motivo = resultado.get("motivo", "")
-            respuesta = {"estado": "ok", "clasificacion": clasificacion, "motivo": motivo, "lat": lat, "lon": lon}
-            if clasificacion != "SIN_NOVEDAD":
-                novedad = {"numero": len(RECORRIDOS_ACTIVOS[ruta_nombre]["novedades"]) + 1, "motivo": motivo,
-                           "clasificacion": clasificacion, "coordenadas": f"{lat},{lon}",
-                           "foto_antes": base["bytes"], "foto_despues": frame_bytes,
-                           "link_munequito": link_mapillary(base["id"], lat, lon),
-                           "hora": datetime.now().strftime("%H:%M:%S")}
-                RECORRIDOS_ACTIVOS[ruta_nombre]["novedades"].append(novedad)
-                respuesta["numero_novedad"] = novedad["numero"]
-            await websocket.send_json(respuesta)
-    except WebSocketDisconnect:
-        logger.info(f"Conexion en vivo cerrada: {ruta_nombre}")
-
-@fastapi_app.post("/finalizar/{ruta_nombre}")
-async def finalizar_recorrido(ruta_nombre: str):
-    info = RECORRIDOS_ACTIVOS.get(ruta_nombre)
-    if not info:
-        return {"error": "No hay un recorrido activo con ese nombre"}
-    datos = datos_vacios()
-    datos["recorrido"]["nombre_ruta"] = ruta_nombre
-    datos["recorrido"]["fecha"] = datetime.now().strftime("%d/%m/%Y")
-    datos["recorrido"]["novedades"] = info["novedades"]
-    datos["recorrido"]["fotos_total"] = len(info["novedades"])
-    xls_bytes = generar_excel(datos)
-    del RECORRIDOS_ACTIVOS[ruta_nombre]
-    return StreamingResponse(io.BytesIO(xls_bytes),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="REPORTE_{ruta_nombre}.xlsx"'})
+class PingHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.end_headers(); self.wfile.write(b"RecorridosIA OK")
+    def log_message(self,format,*args): pass
 
 def ping_render():
     import urllib.request
@@ -1306,15 +1066,16 @@ def ping_render():
 
 def start_web():
     port=int(os.getenv("PORT",8080))
-    logger.info("Servidor FastAPI en puerto "+str(port))
+    server=HTTPServer(("0.0.0.0",port),PingHandler)
+    logger.info("Servidor web en puerto "+str(port))
     threading.Thread(target=ping_render,daemon=True).start()
-    uvicorn.run(fastapi_app, host="0.0.0.0", port=port)
+    server.serve_forever()
 
 # ── BUILD APP ─────────────────────────────────────────────────────────────────
 def build_app():
     app=Application.builder().token(BOT_TOKEN).build()
     conv=ConversationHandler(
-        entry_points=[CommandHandler("start",start),CommandHandler("inspeccionar",generar_informe),CommandHandler("evento",evento_inicio),MessageHandler(filters.Regex("Generar Informe"),generar_informe),MessageHandler(filters.Regex("Nueva Ruta Base"),nueva_ruta),MessageHandler(filters.Regex("Mis Rutas"),mis_rutas),MessageHandler(filters.Regex("Ayuda"),ayuda)],
+        entry_points=[CommandHandler("start",start),CommandHandler("inspeccionar",generar_informe),MessageHandler(filters.Regex("Generar Informe"),generar_informe),MessageHandler(filters.Regex("Nueva Ruta Base"),nueva_ruta),MessageHandler(filters.Regex("Mis Rutas"),mis_rutas),MessageHandler(filters.Regex("Ayuda"),ayuda)],
         states={
             ESPERANDO_TOTP:   [MessageHandler(filters.TEXT&~filters.COMMAND,handler_totp)],
             MENU_PRINCIPAL:   [MessageHandler(filters.Regex("Generar Informe"),generar_informe),MessageHandler(filters.Regex("Nueva Ruta Base"),nueva_ruta),MessageHandler(filters.Regex("Mis Rutas"),mis_rutas),MessageHandler(filters.Regex("Ayuda"),ayuda),MessageHandler(filters.TEXT&~filters.COMMAND,menu_principal)],
@@ -1332,16 +1093,11 @@ def build_app():
             HILO_DATOS:       [MessageHandler(filters.TEXT&~filters.COMMAND,recv_hilo_datos)],
             NUEVA_RUTA_NOMBRE:[MessageHandler(filters.TEXT&~filters.COMMAND,recv_nueva_ruta_nombre)],
             NUEVA_RUTA_VIDEO: [MessageHandler(filters.TEXT|filters.VIDEO|filters.Document.ALL&~filters.COMMAND,recv_nueva_ruta_video)],
-            EVENTO_RUTA:      [MessageHandler(filters.TEXT&~filters.COMMAND,evento_ruta)],
-            EVENTO_MOTIVO:    [MessageHandler(filters.TEXT&~filters.COMMAND,evento_motivo)],
-            EVENTO_COORD:     [MessageHandler(filters.TEXT&~filters.COMMAND,evento_coord)],
-            EVENTO_FOTO:      [MessageHandler(filters.PHOTO|filters.TEXT&~filters.COMMAND,evento_foto)],
         },
         fallbacks=[CommandHandler("cancelar",cancelar)],
         allow_reentry=True,
     )
     app.add_handler(conv)
-    app.add_handler(CommandHandler("preguntar",preguntar))
     app.add_handler(CallbackQueryHandler(tab_callback,pattern="^tab_"))
     app.add_handler(CallbackQueryHandler(tab_callback,pattern="^rep_"))
     app.add_handler(CallbackQueryHandler(vb_callback,pattern="^vb_"))
