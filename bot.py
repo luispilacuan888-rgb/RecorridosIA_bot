@@ -121,6 +121,33 @@ def verificar_totp(codigo):
         pass
     return False
 
+# ── GEMINI: pregunta libre de texto ───────────────────────────────────────────
+async def preguntar_gemini_texto(pregunta):
+    payload = {"contents": [{"parts": [{"text": pregunta}]}]}
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(GEMINI_URL, json=payload)
+            data = resp.json()
+            if "candidates" not in data:
+                logger.error("Gemini /preguntar respondio sin 'candidates': " + json.dumps(data)[:500])
+                return None
+            return data["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception as e:
+        logger.error("Gemini /preguntar error: " + str(e))
+        return None
+
+async def cmd_preguntar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    texto = update.message.text.replace("/preguntar", "", 1).strip()
+    if not texto:
+        await update.message.reply_text("Escribe tu pregunta despues del comando." + chr(10) + "Ejemplo: /preguntar que es un OTDR")
+        return
+    await update.message.reply_text("Pensando...")
+    respuesta = await preguntar_gemini_texto(texto)
+    if respuesta:
+        await update.message.reply_text(respuesta)
+    else:
+        await update.message.reply_text("No pude obtener respuesta de Gemini ahorita. Intenta de nuevo.")
+
 # ── GEMINI ────────────────────────────────────────────────────────────────────
 async def analizar_imagen(img_bytes):
     img_b64 = base64.b64encode(img_bytes).decode()
@@ -1098,6 +1125,7 @@ def build_app():
         allow_reentry=True,
     )
     app.add_handler(conv)
+    app.add_handler(CommandHandler("preguntar", cmd_preguntar))
     app.add_handler(CallbackQueryHandler(tab_callback,pattern="^tab_"))
     app.add_handler(CallbackQueryHandler(tab_callback,pattern="^rep_"))
     app.add_handler(CallbackQueryHandler(vb_callback,pattern="^vb_"))
