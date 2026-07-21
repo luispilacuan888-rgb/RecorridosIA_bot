@@ -15,7 +15,7 @@ GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY")
 MAPILLARY_TOKEN = os.getenv("MAPILLARY_TOKEN")
 TOTP_SECRET     = os.getenv("TOTP_SECRET")
 DOMINIO         = os.getenv("DOMINIO_EMAIL", "telconet.ec")
-GEMINI_URL      = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=" + (GEMINI_API_KEY or "")
+GEMINI_URL      = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=" + (GEMINI_API_KEY or "")
 
 USUARIOS_AUTENTICADOS = set()
 RUTAS_GUARDADAS = {} 
