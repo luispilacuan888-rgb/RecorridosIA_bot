@@ -1077,10 +1077,104 @@ async def cancelar(update, ctx):
     return ConversationHandler.END
 
 # ── SERVIDOR WEB ──────────────────────────────────────────────────────────────
+from socketserver import ThreadingMixIn
+
+# Carpeta donde se guardan los frames que manda la app del celular
+FRAMES_DIR = "/tmp/frames"
+os.makedirs(FRAMES_DIR, exist_ok=True)
+
+# Estado en memoria de cada recorrido en curso: { ruta_id: {"ultimo_frame": int, "hora": str} }
+RECORRIDOS_EN_VIVO = {}
+
 class PingHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path.startswith("/rutas"):
+            # Devuelve la lista de rutas guardadas para que la app las muestre y el usuario elija
+            lista = [
+                {"nombre": nombre, "tipo": info.get("tipo", ""), "fecha": info.get("fecha", "")}
+                for nombre, info in RUTAS_GUARDADAS.items()
+            ]
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"rutas": lista}).encode())
+            return
+        if self.path.startswith("/iniciar"):
+            # Ej: GET /iniciar?ruta=GOSSEAL-MACHACHI  -> registra el inicio real del recorrido
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            ruta = qs.get("ruta", [""])[0]
+            RECORRIDOS_EN_VIVO[ruta] = {
+                "ultimo_frame": 0,
+                "hora": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+                "estado": "iniciado",
+            }
+            logger.info(f"Recorrido iniciado: ruta={ruta}")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": True, "ruta": ruta}).encode())
+            return
+        if self.path.startswith("/estado"):
+            # Ej: GET /estado?ruta=GOSSEAL-MACHACHI  -> te dice en que frame va
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            ruta = qs.get("ruta", [""])[0]
+            info = RECORRIDOS_EN_VIVO.get(ruta)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            if info:
+                self.wfile.write(json.dumps(info).encode())
+            else:
+                self.wfile.write(json.dumps({"error": "no hay recorrido activo para esa ruta"}).encode())
+            return
         self.send_response(200); self.end_headers(); self.wfile.write(b"RecorridosIA OK")
-    def log_message(self,format,*args): pass
+
+    def do_POST(self):
+        # La app manda: POST /frame?ruta=NOMBRE_RUTA&indice=123
+        # Body = bytes crudos de la imagen JPEG del frame
+        if self.path.startswith("/frame"):
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            ruta = qs.get("ruta", ["sin_nombre"])[0]
+            indice = qs.get("indice", ["0"])[0]
+
+            largo = int(self.headers.get("Content-Length", 0))
+            datos = self.rfile.read(largo) if largo > 0 else b""
+
+            if not datos:
+                self.send_response(400); self.end_headers()
+                self.wfile.write(b'{"error":"no llego imagen"}')
+                return
+
+            # Guardar el frame en disco: /tmp/frames/NOMBRE_RUTA/000123.jpg
+            carpeta_ruta = os.path.join(FRAMES_DIR, ruta)
+            os.makedirs(carpeta_ruta, exist_ok=True)
+            ruta_archivo = os.path.join(carpeta_ruta, indice.zfill(6) + ".jpg")
+            with open(ruta_archivo, "wb") as f:
+                f.write(datos)
+
+            RECORRIDOS_EN_VIVO[ruta] = {
+                "ultimo_frame": int(indice),
+                "hora": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+            }
+
+            logger.info(f"Frame recibido: ruta={ruta} indice={indice} bytes={len(datos)}")
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": True, "recibido": indice}).encode())
+            return
+
+        self.send_response(404); self.end_headers()
+
+    def log_message(self, format, *args):
+        pass
+
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
 
 def ping_render():
     import urllib.request
@@ -1093,7 +1187,7 @@ def ping_render():
 
 def start_web():
     port=int(os.getenv("PORT",8080))
-    server=HTTPServer(("0.0.0.0",port),PingHandler)
+    server=ThreadingHTTPServer(("0.0.0.0",port),PingHandler)
     logger.info("Servidor web en puerto "+str(port))
     threading.Thread(target=ping_render,daemon=True).start()
     server.serve_forever()
