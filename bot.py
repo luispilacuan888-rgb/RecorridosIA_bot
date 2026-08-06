@@ -1,7 +1,8 @@
-import os, io, hmac, struct, time, base64, hashlib, json, logging, threading
+import os, io, hmac, struct, time, base64, hashlib, json, logging, threading, asyncio
 import httpx
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from PIL import Image, ImageDraw, ImageFont
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
@@ -1086,6 +1087,80 @@ os.makedirs(FRAMES_DIR, exist_ok=True)
 # Estado en memoria de cada recorrido en curso: { ruta_id: {"ultimo_frame": int, "hora": str} }
 RECORRIDOS_EN_VIVO = {}
 
+# PRUEBA: novedades detectadas automaticamente por Gemini durante el recorrido en vivo
+# { ruta_id: [ {"motivo":..., "remedio":..., "coordenadas":..., "foto_antes": bytes, "indice": int, "hora": str}, ... ] }
+NOVEDADES_EN_VIVO = {}
+
+# Loop de asyncio dedicado para poder llamar funciones async (Gemini) desde el
+# servidor HTTP sincrono, sin bloquear ni pelear con el loop del bot de Telegram.
+_frame_loop = asyncio.new_event_loop()
+def _correr_loop_frames():
+    asyncio.set_event_loop(_frame_loop)
+    _frame_loop.run_forever()
+threading.Thread(target=_correr_loop_frames, daemon=True).start()
+
+
+def _sello_frame(img_bytes, lat=None, lon=None):
+    """PRUEBA: pega logo TELCONET + fecha/hora + coordenadas (si vienen) sobre el frame."""
+    try:
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        draw = ImageDraw.Draw(img)
+        w, h = img.size
+
+        # Logo (reusa el mismo LOGO_B64 que ya usa el Excel)
+        try:
+            logo = Image.open(io.BytesIO(base64.b64decode(LOGO_B64))).convert("RGBA")
+            logo_w = int(w * 0.28)
+            logo_h = int(logo_w * logo.height / logo.width)
+            logo = logo.resize((logo_w, logo_h))
+            img.paste(logo, (w - logo_w - 20, 20), logo)
+        except Exception as e:
+            logger.warning("No se pudo pegar el logo: " + str(e))
+
+        # Texto: fecha/hora + coordenadas, estilo sello (abajo, con sombra para que se lea)
+        ahora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        lineas = [ahora]
+        if lat and lon:
+            lineas.append(f"{lat}, {lon}")
+        else:
+            lineas.append("GPS no disponible")
+
+        try:
+            fuente = ImageFont.truetype("DejaVuSans-Bold.ttf", max(18, int(w * 0.028)))
+        except Exception:
+            fuente = ImageFont.load_default()
+
+        y = h - (len(lineas) * int(w * 0.035)) - 20
+        for linea in lineas:
+            x = 20
+            # sombra negra + texto blanco encima, para que se lea sobre cualquier fondo
+            draw.text((x+2, y+2), linea, font=fuente, fill=(0, 0, 0))
+            draw.text((x, y), linea, font=fuente, fill=(255, 255, 255))
+            y += int(w * 0.035)
+
+        salida = io.BytesIO()
+        img.save(salida, format="JPEG", quality=85)
+        return salida.getvalue()
+    except Exception as e:
+        logger.error("Error poniendo sello al frame: " + str(e))
+        return img_bytes  # si falla el sello, se guarda la foto original igual
+
+
+def _analizar_frame_en_fondo(ruta, indice, datos_con_sello):
+    """PRUEBA: corre analizar_imagen() (Gemini) en el loop dedicado, sin bloquear el POST."""
+    async def _tarea():
+        try:
+            resultado = await analizar_imagen(datos_con_sello)
+            if resultado:
+                resultado["indice"] = int(indice)
+                resultado["hora"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                NOVEDADES_EN_VIVO.setdefault(ruta, []).append(resultado)
+                logger.info(f"[PRUEBA] Novedad IA detectada: ruta={ruta} indice={indice} motivo={resultado.get('motivo')}")
+        except Exception as e:
+            logger.error(f"[PRUEBA] Error analizando frame con Gemini: {e}")
+    asyncio.run_coroutine_threadsafe(_tarea(), _frame_loop)
+
+
 class PingHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/rutas"):
@@ -1129,16 +1204,33 @@ class PingHandler(BaseHTTPRequestHandler):
             else:
                 self.wfile.write(json.dumps({"error": "no hay recorrido activo para esa ruta"}).encode())
             return
+        if self.path.startswith("/novedades_auto"):
+            # PRUEBA: GET /novedades_auto?ruta=X -> lista lo que Gemini fue detectando en vivo
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            ruta = qs.get("ruta", [""])[0]
+            lista = NOVEDADES_EN_VIVO.get(ruta, [])
+            resumen = [
+                {"indice": n.get("indice"), "hora": n.get("hora"), "motivo": n.get("motivo"), "coordenadas": n.get("coordenadas")}
+                for n in lista
+            ]
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ruta": ruta, "total_novedades": len(lista), "novedades": resumen}, ensure_ascii=False).encode("utf-8"))
+            return
         self.send_response(200); self.end_headers(); self.wfile.write(b"RecorridosIA OK")
 
     def do_POST(self):
-        # La app manda: POST /frame?ruta=NOMBRE_RUTA&indice=123
+        # La app manda: POST /frame?ruta=NOMBRE_RUTA&indice=123&lat=...&lon=...
         # Body = bytes crudos de la imagen JPEG del frame
         if self.path.startswith("/frame"):
             from urllib.parse import urlparse, parse_qs
             qs = parse_qs(urlparse(self.path).query)
             ruta = qs.get("ruta", ["sin_nombre"])[0]
             indice = qs.get("indice", ["0"])[0]
+            lat = qs.get("lat", [None])[0]
+            lon = qs.get("lon", [None])[0]
 
             largo = int(self.headers.get("Content-Length", 0))
             datos = self.rfile.read(largo) if largo > 0 else b""
@@ -1148,19 +1240,25 @@ class PingHandler(BaseHTTPRequestHandler):
                 self.wfile.write(b'{"error":"no llego imagen"}')
                 return
 
-            # Guardar el frame en disco: /tmp/frames/NOMBRE_RUTA/000123.jpg
+            # PRUEBA: pegar logo + fecha/hora + coordenadas sobre el frame antes de guardarlo
+            datos_con_sello = _sello_frame(datos, lat, lon)
+
+            # Guardar el frame (ya con sello) en disco: /tmp/frames/NOMBRE_RUTA/000123.jpg
             carpeta_ruta = os.path.join(FRAMES_DIR, ruta)
             os.makedirs(carpeta_ruta, exist_ok=True)
             ruta_archivo = os.path.join(carpeta_ruta, indice.zfill(6) + ".jpg")
             with open(ruta_archivo, "wb") as f:
-                f.write(datos)
+                f.write(datos_con_sello)
 
             RECORRIDOS_EN_VIVO[ruta] = {
                 "ultimo_frame": int(indice),
                 "hora": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
             }
 
-            logger.info(f"Frame recibido: ruta={ruta} indice={indice} bytes={len(datos)}")
+            logger.info(f"Frame recibido: ruta={ruta} indice={indice} bytes={len(datos)} lat={lat} lon={lon}")
+
+            # PRUEBA: analizar el frame con Gemini en segundo plano (no bloquea la respuesta)
+            _analizar_frame_en_fondo(ruta, indice, datos_con_sello)
 
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
