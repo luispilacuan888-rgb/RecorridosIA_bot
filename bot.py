@@ -186,30 +186,32 @@ async def mapillary_obtener_secuencia(pkey):
     if not MAPILLARY_TOKEN:
         logger.error("[Mapillary] Falta MAPILLARY_TOKEN")
         return []
+    headers = {"Authorization": "OAuth " + MAPILLARY_TOKEN}
     async with httpx.AsyncClient(timeout=30) as client:
         # 1. de la foto puntual, sacar a que secuencia pertenece
         r1 = await client.get(f"https://graph.mapillary.com/{pkey}",
-                               params={"access_token": MAPILLARY_TOKEN, "fields": "sequence"})
-        r1.raise_for_status()
+                               headers=headers, params={"fields": "sequence"})
+        if r1.status_code != 200:
+            raise Exception(f"Mapillary respondio {r1.status_code} al buscar la foto: {r1.text[:200]}")
         sequence_id = r1.json().get("sequence")
         if not sequence_id:
-            logger.error("[Mapillary] No se pudo obtener sequence_id de pKey=" + str(pkey))
-            return []
+            raise Exception(f"La foto pKey={pkey} no tiene sequence_id (respuesta: {r1.text[:200]})")
 
         # 2. traer todos los ids de esa secuencia
         r2 = await client.get("https://graph.mapillary.com/image_ids",
-                               params={"access_token": MAPILLARY_TOKEN, "sequence_id": sequence_id})
-        r2.raise_for_status()
+                               headers=headers, params={"sequence_id": sequence_id})
+        if r2.status_code != 200:
+            raise Exception(f"Mapillary respondio {r2.status_code} al pedir image_ids: {r2.text[:200]}")
         ids = [x["id"] for x in r2.json().get("data", [])]
         if not ids:
-            return []
+            raise Exception("La secuencia no devolvio ninguna imagen")
 
         # 3. traer lat/lon + fecha de captura de cada imagen, en lotes de 50
         puntos = []
         for i in range(0, len(ids), 50):
             lote = ids[i:i+50]
             r3 = await client.get("https://graph.mapillary.com/images",
-                                   params={"access_token": MAPILLARY_TOKEN, "ids": ",".join(lote),
+                                   headers=headers, params={"ids": ",".join(lote),
                                             "fields": "id,geometry,captured_at"})
             r3.raise_for_status()
             for item in r3.json().get("data", []):
