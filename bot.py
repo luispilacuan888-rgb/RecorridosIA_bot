@@ -736,12 +736,21 @@ async def tab_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif data in ("tab_reportes","tab_fotos"):
         nombre_tab="REPORTES_DE_RECORRIDOS" if data=="tab_reportes" else "FOTOS_ANEXAS_AL_REPORTE"
+        ctx.user_data["origen_tab"]="reportes" if data=="tab_reportes" else "fotos"
         teclado2=InlineKeyboardMarkup([
             [InlineKeyboardButton("Manual (sin senial)",callback_data="rep_manual"),InlineKeyboardButton("Con IA (Gemini)",callback_data="rep_ia")],
             [InlineKeyboardButton("Volver al menu",callback_data="tab_menu")],
         ])
         await query.edit_message_text(nombre_tab+chr(10)+chr(10)+"Como quieres llenar esta pestana?",reply_markup=teclado2)
         return TAB_MENU
+
+    elif data=="rep_manual" and ctx.user_data.get("origen_tab")=="reportes":
+        # Flujo NUEVO: preguntas una por una, en vez de plantilla para copiar/pegar.
+        ctx.user_data["recorrido_tmp"]={}
+        await query.edit_message_text(
+            "REPORTES_DE_RECORRIDOS — Ingreso paso a paso"+chr(10)+"━━━━━━━━━━━━━━━━━━━━━━━━━━━━"+chr(10)+chr(10)+
+            "1/10 — Nombre de la ruta:"+chr(10)+"Ejemplo: GOSSEAL-MACHACHI",reply_markup=volver)
+        return GENERAR_NOMBRE_RUTA
 
     elif data=="rep_manual":
         msg=("REPORTES - Modo Manual"+chr(10)+"━━━━━━━━━━━━━━━━━━━━━━━━━━━━"+chr(10)+chr(10)+
@@ -863,6 +872,123 @@ async def tab_mpriu(update, ctx):
         (resumen if resumen else "  Sin novedades")+chr(10)+"━━━━━━━━━━━━━━━━━━━━━━━━━━━━"+chr(10)+chr(10)+
         "Ajusta cantidades en formato NUMERO:CANTIDAD"+chr(10)+"Ejemplo: 16:5,18:1"+chr(10)+"Si estan correctas escribe: OK")
     return TAB_MPRIU
+
+# ── REPORTES: INGRESO PASO A PASO (nuevo) ─────────────────────────────────────
+async def _sig_pregunta(update, ctx, numero, total, etiqueta, ejemplo, siguiente_estado):
+    await update.message.reply_text(
+        str(numero)+"/"+str(total)+" — "+etiqueta+":"+chr(10)+"Ejemplo: "+ejemplo)
+    return siguiente_estado
+
+async def gen_nombre_ruta(update, ctx):
+    ctx.user_data["recorrido_tmp"]["nombre_ruta"]=update.message.text.strip().upper()
+    return await _sig_pregunta(update,ctx,2,10,"Codigo de cuadrilla","FO UIO INT 04",GENERAR_CUADRILLA)
+
+async def gen_cuadrilla(update, ctx):
+    ctx.user_data["recorrido_tmp"]["codigo_cuadrilla"]=update.message.text.strip().upper()
+    tmp=ctx.user_data["recorrido_tmp"]
+    nombre_ruta=tmp.get("nombre_ruta","")
+
+    # Si el nombre de la ruta tiene guion (ej. GOSSEAL-MACHACHI), sugerir
+    # nodo inicial/final automaticamente y saltarse esas 2 preguntas.
+    if "-" in nombre_ruta:
+        partes=[p.strip() for p in nombre_ruta.split("-",1)]
+        tmp["nodo_inicial"],tmp["nodo_final"]=partes[0],partes[1]
+        await update.message.reply_text(
+            "3-4/10 — Nodo inicial y final detectados del nombre de la ruta:"+chr(10)+
+            "Nodo inicial: "+tmp["nodo_inicial"]+chr(10)+"Nodo final: "+tmp["nodo_final"]+chr(10)+chr(10)+
+            "Escribe OK para confirmar, o escribe los correctos separados por coma"+chr(10)+
+            "Ejemplo: GOSSEAL, MACHACHI")
+        return GENERAR_NODO_INI  # reusamos este estado como confirmacion
+    else:
+        return await _sig_pregunta(update,ctx,3,10,"Nodo inicial","GOSSEAL",GENERAR_NODO_INI)
+
+async def gen_nodo_ini(update, ctx):
+    tmp=ctx.user_data["recorrido_tmp"]
+    txt=update.message.text.strip()
+    if tmp.get("nodo_inicial") and tmp.get("nodo_final"):
+        # Venimos del auto-sugerido: confirmar o corregir
+        if txt.upper()!="OK":
+            partes=[p.strip().upper() for p in txt.split(",")]
+            if len(partes)>=2:
+                tmp["nodo_inicial"],tmp["nodo_final"]=partes[0],partes[1]
+        return await _sig_pregunta(update,ctx,5,10,"Lider de cuadrilla","RICHARD DAVID TAIPE COYAGO",GENERAR_LIDER)
+    else:
+        tmp["nodo_inicial"]=txt.upper()
+        return await _sig_pregunta(update,ctx,4,10,"Nodo final","MACHACHI",GENERAR_NODO_FIN)
+
+async def gen_nodo_fin(update, ctx):
+    ctx.user_data["recorrido_tmp"]["nodo_final"]=update.message.text.strip().upper()
+    return await _sig_pregunta(update,ctx,5,10,"Lider de cuadrilla","RICHARD DAVID TAIPE COYAGO",GENERAR_LIDER)
+
+async def gen_lider(update, ctx):
+    ctx.user_data["recorrido_tmp"]["lider"]=update.message.text.strip().upper()
+    return await _sig_pregunta(update,ctx,6,10,"Ayudante tecnico","JOSE LUIS ALLAICA CONDO",GENERAR_AYUDANTE)
+
+async def gen_ayudante(update, ctx):
+    ctx.user_data["recorrido_tmp"]["ayudante"]=update.message.text.strip().upper()
+    return await _sig_pregunta(update,ctx,7,10,"Coordinador fibra optica","JUAN CARLOS YEPEZ ACAN",GENERAR_COORDINADOR)
+
+async def gen_coordinador(update, ctx):
+    ctx.user_data["recorrido_tmp"]["coordinador"]=update.message.text.strip().upper()
+    return await _sig_pregunta(update,ctx,8,10,"Placa del vehiculo","PCO3940",GENERAR_PLACA)
+
+async def gen_placa(update, ctx):
+    ctx.user_data["recorrido_tmp"]["placa"]=update.message.text.strip().upper()
+    return await _sig_pregunta(update,ctx,9,10,"Distancia de la ruta","59KM",GENERAR_DISTANCIA)
+
+async def gen_distancia(update, ctx):
+    ctx.user_data["recorrido_tmp"]["distancia"]=update.message.text.strip().upper()
+    tmp=ctx.user_data["recorrido_tmp"]
+    info_vivo=RECORRIDOS_EN_VIVO.get(tmp.get("nombre_ruta",""))
+
+    if info_vivo and info_vivo.get("hora_inicio"):
+        # 10/10 — Ya tenemos fecha/hora reales del recorrido con la camara: se auto-completan.
+        tmp["fecha"]=info_vivo.get("fecha","")
+        tmp["hora_inicio"]=info_vivo.get("hora_inicio","")
+        tmp["hora_fin"]=info_vivo.get("hora_fin","")
+        await update.message.reply_text(
+            "10/10 — Fecha y horas detectadas automaticamente del recorrido con la camara:"+chr(10)+
+            "Fecha: "+tmp["fecha"]+chr(10)+"Hora inicio: "+tmp["hora_inicio"]+chr(10)+"Hora fin: "+tmp["hora_fin"]+chr(10)+chr(10)+
+            "Escribe OK para confirmar, o escribe la fecha/horas correctas separadas por coma"+chr(10)+
+            "Ejemplo: 05/08/2026, 16:00:00, 16:45:00")
+        return GENERAR_CONFIRMAR
+    else:
+        await update.message.reply_text(
+            "10/10 — No se detecto un recorrido con camara para esta ruta."+chr(10)+
+            "Escribe fecha y horas separadas por coma:"+chr(10)+"Ejemplo: 05/08/2026, 16:00:00, 16:45:00"+chr(10)+chr(10)+
+            "(o escribe HOY para usar la fecha/hora actual)")
+        return GENERAR_CONFIRMAR
+
+async def gen_confirmar_fecha_horas(update, ctx):
+    tmp=ctx.user_data["recorrido_tmp"]
+    txt=update.message.text.strip()
+    if txt.upper()!="OK":
+        if txt.upper()=="HOY":
+            ahora=datetime.now()
+            tmp["fecha"]=ahora.strftime("%d/%m/%Y"); tmp["hora_inicio"]=ahora.strftime("%H:%M:%S"); tmp["hora_fin"]=ahora.strftime("%H:%M:%S")
+        else:
+            partes=[p.strip() for p in txt.split(",")]
+            if len(partes)>=3:
+                tmp["fecha"],tmp["hora_inicio"],tmp["hora_fin"]=partes[0],partes[1],partes[2]
+
+    # Volcar todo a la estructura real que usa el generador de Excel
+    datos=ctx.user_data["datos"]; r=datos["recorrido"]
+    r["nombre_ruta"]=tmp.get("nombre_ruta","")
+    r["codigo_cuadrilla"]=tmp.get("codigo_cuadrilla","")
+    r["nodo_inicial"]=tmp.get("nodo_inicial","")
+    r["nodo_final"]=tmp.get("nodo_final","")
+    r["lider"]=tmp.get("lider","")
+    r["ayudante"]=tmp.get("ayudante","")
+    r["coordinador"]=tmp.get("coordinador","")
+    datos["ciu"]["vehiculo_placa"]=tmp.get("placa","")
+    datos["ciu"]["distancia_ruta"]=tmp.get("distancia","")
+    r["fecha"]=tmp.get("fecha",""); r["hora_inicio"]=tmp.get("hora_inicio",""); r["hora_fin"]=tmp.get("hora_fin","")
+
+    await update.message.reply_text(
+        "✅ REPORTES_DE_RECORRIDOS guardado"+chr(10)+"━━━━━━━━━━━━━━━━━━━━━━━━━━━━"+chr(10)+
+        "Ruta: "+r["nombre_ruta"]+chr(10)+"Cuadrilla: "+r["codigo_cuadrilla"]+chr(10)+
+        "Fecha: "+r["fecha"]+"   "+r["hora_inicio"]+" - "+r["hora_fin"])
+    return await tab_menu(update, ctx)
 
 # ── REPORTES HANDLERS ─────────────────────────────────────────────────────────
 async def tab_reportes(update, ctx):
@@ -1179,9 +1305,12 @@ class PingHandler(BaseHTTPRequestHandler):
             from urllib.parse import urlparse, parse_qs
             qs = parse_qs(urlparse(self.path).query)
             ruta = qs.get("ruta", [""])[0]
+            ahora = datetime.now()
             RECORRIDOS_EN_VIVO[ruta] = {
                 "ultimo_frame": 0,
-                "hora": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+                "fecha": ahora.strftime("%d/%m/%Y"),
+                "hora_inicio": ahora.strftime("%H:%M:%S"),
+                "hora_fin": ahora.strftime("%H:%M:%S"),
                 "estado": "iniciado",
             }
             logger.info(f"Recorrido iniciado: ruta={ruta}")
@@ -1250,10 +1379,13 @@ class PingHandler(BaseHTTPRequestHandler):
             with open(ruta_archivo, "wb") as f:
                 f.write(datos_con_sello)
 
-            RECORRIDOS_EN_VIVO[ruta] = {
-                "ultimo_frame": int(indice),
-                "hora": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
-            }
+            RECORRIDOS_EN_VIVO.setdefault(ruta, {
+                "fecha": datetime.now().strftime("%d/%m/%Y"),
+                "hora_inicio": datetime.now().strftime("%H:%M:%S"),
+            })
+            RECORRIDOS_EN_VIVO[ruta]["ultimo_frame"] = int(indice)
+            RECORRIDOS_EN_VIVO[ruta]["hora_fin"] = datetime.now().strftime("%H:%M:%S")
+            RECORRIDOS_EN_VIVO[ruta]["estado"] = "en_curso"
 
             logger.info(f"Frame recibido: ruta={ruta} indice={indice} bytes={len(datos)} lat={lat} lon={lon}")
 
@@ -1304,6 +1436,16 @@ def build_app():
             TAB_CIU_MATE:     [MessageHandler(filters.TEXT&~filters.COMMAND,tab_ciu_mate)],
             TAB_MPRIU:        [MessageHandler(filters.TEXT&~filters.COMMAND,tab_mpriu)],
             TAB_REPORTES:     [MessageHandler(filters.TEXT&~filters.COMMAND,tab_reportes)],
+            GENERAR_NOMBRE_RUTA: [MessageHandler(filters.TEXT&~filters.COMMAND,gen_nombre_ruta)],
+            GENERAR_CUADRILLA:   [MessageHandler(filters.TEXT&~filters.COMMAND,gen_cuadrilla)],
+            GENERAR_NODO_INI:    [MessageHandler(filters.TEXT&~filters.COMMAND,gen_nodo_ini)],
+            GENERAR_NODO_FIN:    [MessageHandler(filters.TEXT&~filters.COMMAND,gen_nodo_fin)],
+            GENERAR_LIDER:       [MessageHandler(filters.TEXT&~filters.COMMAND,gen_lider)],
+            GENERAR_AYUDANTE:    [MessageHandler(filters.TEXT&~filters.COMMAND,gen_ayudante)],
+            GENERAR_COORDINADOR: [MessageHandler(filters.TEXT&~filters.COMMAND,gen_coordinador)],
+            GENERAR_PLACA:       [MessageHandler(filters.TEXT&~filters.COMMAND,gen_placa)],
+            GENERAR_DISTANCIA:   [MessageHandler(filters.TEXT&~filters.COMMAND,gen_distancia)],
+            GENERAR_CONFIRMAR:   [MessageHandler(filters.TEXT&~filters.COMMAND,gen_confirmar_fecha_horas)],
             TAB_NOVEDADES_IA: [MessageHandler(filters.PHOTO,tab_novedades_ia),MessageHandler(filters.TEXT&~filters.COMMAND,tab_novedades_ia)],
             MANGA_NOMBRE:     [MessageHandler(filters.TEXT&~filters.COMMAND,recv_manga_nombre)],
             MANGA_COORDS:     [MessageHandler(filters.TEXT&~filters.COMMAND,recv_manga_coords)],
