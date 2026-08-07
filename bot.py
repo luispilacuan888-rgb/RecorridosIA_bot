@@ -172,7 +172,88 @@ async def analizar_imagen(img_bytes):
         logger.error("Gemini error: " + str(e))
         return None
 
-# ── EXCEL ─────────────────────────────────────────────────────────────────────
+# ── MAPILLARY (PRUEBA: catalogo de eventos para comparar contra el video base) ─
+import re, math
+
+def _extraer_pkey(link):
+    """Saca el pKey (id de la foto) de un link tipo https://www.mapillary.com/app/?pKey=XXXX"""
+    m = re.search(r"pKey=(\d+)", link or "")
+    return m.group(1) if m else None
+
+async def mapillary_obtener_secuencia(pkey):
+    """PRUEBA: baja todos los puntos (id, lat, lon) de la secuencia de Mapillary
+    a la que pertenece esa foto puntual, ordenados por fecha de captura."""
+    if not MAPILLARY_TOKEN:
+        logger.error("[Mapillary] Falta MAPILLARY_TOKEN")
+        return []
+    async with httpx.AsyncClient(timeout=30) as client:
+        # 1. de la foto puntual, sacar a que secuencia pertenece
+        r1 = await client.get(f"https://graph.mapillary.com/{pkey}",
+                               params={"access_token": MAPILLARY_TOKEN, "fields": "sequence"})
+        r1.raise_for_status()
+        sequence_id = r1.json().get("sequence")
+        if not sequence_id:
+            logger.error("[Mapillary] No se pudo obtener sequence_id de pKey=" + str(pkey))
+            return []
+
+        # 2. traer todos los ids de esa secuencia
+        r2 = await client.get("https://graph.mapillary.com/image_ids",
+                               params={"access_token": MAPILLARY_TOKEN, "sequence_id": sequence_id})
+        r2.raise_for_status()
+        ids = [x["id"] for x in r2.json().get("data", [])]
+        if not ids:
+            return []
+
+        # 3. traer lat/lon + fecha de captura de cada imagen, en lotes de 50
+        puntos = []
+        for i in range(0, len(ids), 50):
+            lote = ids[i:i+50]
+            r3 = await client.get("https://graph.mapillary.com/images",
+                                   params={"access_token": MAPILLARY_TOKEN, "ids": ",".join(lote),
+                                            "fields": "id,geometry,captured_at"})
+            r3.raise_for_status()
+            for item in r3.json().get("data", []):
+                lon, lat = item["geometry"]["coordinates"]
+                puntos.append({"id": item["id"], "lat": lat, "lon": lon, "captured_at": item.get("captured_at", 0)})
+
+        puntos.sort(key=lambda p: p["captured_at"])
+        return puntos
+
+def _distancia_metros(lat1, lon1, lat2, lon2):
+    """Distancia aproximada entre 2 coordenadas GPS, en metros (formula haversine)."""
+    R = 6371000
+    f1, f2 = math.radians(lat1), math.radians(lat2)
+    df = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = math.sin(df/2)**2 + math.cos(f1)*math.cos(f2)*math.sin(dl/2)**2
+    return 2 * R * math.asin(math.sqrt(a))
+
+# Catalogo de eventos por ruta: { ruta: [ {"evento":1,"lat":...,"lon":...,"mapillary_id":...,"capturado":False}, ... ] }
+EVENTOS_RUTA = {}
+UMBRAL_METROS = 25  # que tan cerca hay que estar de un evento para que "cuente"
+
+async def armar_catalogo_eventos(nombre_ruta, mapillary_link, cantidad_eventos=2):
+    """PRUEBA: baja la secuencia de Mapillary y reparte 'cantidad_eventos' puntos
+    de manera pareja a lo largo de la ruta, para usarlos como puntos de control."""
+    pkey = _extraer_pkey(mapillary_link)
+    if not pkey:
+        logger.error("[Mapillary] No se pudo extraer pKey del link: " + str(mapillary_link))
+        return None
+    puntos = await mapillary_obtener_secuencia(pkey)
+    if not puntos:
+        return None
+
+    total = len(puntos)
+    eventos = []
+    for i in range(1, cantidad_eventos+1):
+        idx = min(int(total * i / (cantidad_eventos+1)), total-1)
+        p = puntos[idx]
+        eventos.append({"evento": i, "lat": p["lat"], "lon": p["lon"], "mapillary_id": p["id"], "capturado": False})
+    EVENTOS_RUTA[nombre_ruta] = eventos
+    logger.info(f"[Mapillary] Catalogo armado para {nombre_ruta}: {len(eventos)} eventos de {total} frames base")
+    return eventos
+
+
 def _logo_image():
     from openpyxl.drawing.image import Image as XLImage
     try:
@@ -1152,6 +1233,19 @@ async def recv_nueva_ruta_video(update, ctx):
         link=update.message.text.strip()
         RUTAS_GUARDADAS[nombre]={"nombre":nombre,"mapillary_link":link,"tipo":"mapillary","fecha":datetime.now().strftime("%d/%m/%Y %H:%M")}
         await update.message.reply_text("✅ Ruta base guardada!"+chr(10)+"Nombre: "+nombre+chr(10)+"Link: "+link)
+
+        # PRUEBA: armar el catalogo de 2 eventos de control bajando la secuencia de Mapillary
+        await update.message.reply_text("Armando catalogo de eventos desde Mapillary, un momento...")
+        try:
+            eventos = await armar_catalogo_eventos(nombre, link, cantidad_eventos=2)
+            if eventos:
+                resumen = chr(10).join([f"  Evento {e['evento']}: {e['lat']:.6f}, {e['lon']:.6f}" for e in eventos])
+                await update.message.reply_text("✅ Catalogo de PRUEBA armado (2 eventos):"+chr(10)+resumen)
+            else:
+                await update.message.reply_text("⚠️ No se pudo armar el catalogo automaticamente (revisar el link o el token de Mapillary). La ruta igual quedo guardada.")
+        except Exception as e:
+            logger.error("Error armando catalogo de eventos: " + str(e))
+            await update.message.reply_text("⚠️ Error armando el catalogo automatico: "+str(e)+chr(10)+"La ruta igual quedo guardada.")
     elif update.message.video or update.message.document:
         RUTAS_GUARDADAS[nombre]={"nombre":nombre,"tipo":"video_telegram","fecha":datetime.now().strftime("%d/%m/%Y %H:%M")}
         await update.message.reply_text("✅ Video recibido!"+chr(10)+"Ruta base guardada: "+nombre)
@@ -1287,6 +1381,47 @@ def _analizar_frame_en_fondo(ruta, indice, datos_con_sello):
     asyncio.run_coroutine_threadsafe(_tarea(), _frame_loop)
 
 
+# PRUEBA: fotos ya capturadas por evento -> { ruta: { evento_num: {"motivo":..., "hora":..., "lat":..., "lon":...} } }
+EVENTOS_CAPTURADOS = {}
+
+def _revisar_eventos_en_fondo(ruta, indice, lat, lon, datos_con_sello):
+    """PRUEBA: si el GPS del frame esta cerca de algun evento del catalogo (y ese
+    evento todavia no fue capturado), analiza ese frame puntual con Gemini y lo
+    guarda como la foto/resultado de ese evento."""
+    if lat is None or lon is None:
+        return
+    eventos = EVENTOS_RUTA.get(ruta)
+    if not eventos:
+        return
+    try:
+        lat_f, lon_f = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return
+
+    for ev in eventos:
+        if ev["capturado"]:
+            continue
+        dist = _distancia_metros(lat_f, lon_f, ev["lat"], ev["lon"])
+        if dist <= UMBRAL_METROS:
+            ev["capturado"] = True  # marcar antes de llamar a Gemini para no duplicar si llegan frames casi juntos
+            evento_num = ev["evento"]
+
+            async def _tarea(evento_num=evento_num, dist=dist):
+                try:
+                    resultado = await analizar_imagen(datos_con_sello)
+                    if resultado is None:
+                        resultado = {"motivo": SIN_NOV_MOTIVO, "remedio": SIN_NOV_REMEDIO, "coordenadas": f"{lat_f},{lon_f}", "foto_antes": datos_con_sello}
+                    resultado["evento"] = evento_num
+                    resultado["indice"] = int(indice)
+                    resultado["hora"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                    resultado["distancia_m"] = round(dist, 1)
+                    EVENTOS_CAPTURADOS.setdefault(ruta, {})[evento_num] = resultado
+                    logger.info(f"[PRUEBA] Evento {evento_num} capturado: ruta={ruta} dist={dist:.1f}m motivo={resultado.get('motivo')}")
+                except Exception as e:
+                    logger.error(f"[PRUEBA] Error analizando evento {evento_num}: {e}")
+            asyncio.run_coroutine_threadsafe(_tarea(), _frame_loop)
+
+
 class PingHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/rutas"):
@@ -1348,6 +1483,29 @@ class PingHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"ruta": ruta, "total_novedades": len(lista), "novedades": resumen}, ensure_ascii=False).encode("utf-8"))
             return
+        if self.path.startswith("/eventos_estado"):
+            # PRUEBA: GET /eventos_estado?ruta=X -> catalogo de eventos y cuales ya se capturaron
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            ruta = qs.get("ruta", [""])[0]
+            catalogo = EVENTOS_RUTA.get(ruta, [])
+            capturados = EVENTOS_CAPTURADOS.get(ruta, {})
+            estado = []
+            for ev in catalogo:
+                cap = capturados.get(ev["evento"])
+                estado.append({
+                    "evento": ev["evento"],
+                    "lat": ev["lat"], "lon": ev["lon"],
+                    "capturado": ev["capturado"],
+                    "motivo": cap.get("motivo") if cap else None,
+                    "hora": cap.get("hora") if cap else None,
+                    "distancia_m": cap.get("distancia_m") if cap else None,
+                })
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ruta": ruta, "eventos": estado}, ensure_ascii=False).encode("utf-8"))
+            return
         self.send_response(200); self.end_headers(); self.wfile.write(b"RecorridosIA OK")
 
     def do_POST(self):
@@ -1391,6 +1549,9 @@ class PingHandler(BaseHTTPRequestHandler):
 
             # PRUEBA: analizar el frame con Gemini en segundo plano (no bloquea la respuesta)
             _analizar_frame_en_fondo(ruta, indice, datos_con_sello)
+
+            # PRUEBA: si el GPS esta cerca de algun evento del catalogo, capturarlo para el evento
+            _revisar_eventos_en_fondo(ruta, indice, lat, lon, datos_con_sello)
 
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
