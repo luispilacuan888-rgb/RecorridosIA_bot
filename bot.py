@@ -243,14 +243,16 @@ async def armar_catalogo_eventos(nombre_ruta, mapillary_link, cantidad_eventos=2
         return None
     puntos = await mapillary_obtener_secuencia(pkey)
     if not puntos:
+        logger.error(f"[Mapillary] mapillary_obtener_secuencia devolvio vacio para pkey={pkey}")
         return None
 
     total = len(puntos)
+    logger.info(f"[Mapillary] {total} puntos obtenidos para {nombre_ruta}, armando {cantidad_eventos} eventos")
     eventos = []
     for i in range(1, cantidad_eventos+1):
         idx = min(int(total * i / (cantidad_eventos+1)), total-1)
         p = puntos[idx]
-        eventos.append({"evento": i, "lat": p["lat"], "lon": p["lon"], "mapillary_id": p["id"], "capturado": False})
+        eventos.append({"evento": i, "lat": float(p["lat"]), "lon": float(p["lon"]), "mapillary_id": p["id"], "capturado": False})
     EVENTOS_RUTA[nombre_ruta] = eventos
     logger.info(f"[Mapillary] Catalogo armado para {nombre_ruta}: {len(eventos)} eventos de {total} frames base")
     return eventos
@@ -1244,10 +1246,10 @@ async def recv_nueva_ruta_video(update, ctx):
                 resumen = chr(10).join([f"  Evento {e['evento']}: {e['lat']:.6f}, {e['lon']:.6f}" for e in eventos])
                 await update.message.reply_text("✅ Catalogo de PRUEBA armado (2 eventos):"+chr(10)+resumen)
             else:
-                await update.message.reply_text("⚠️ No se pudo armar el catalogo automaticamente (revisar el link o el token de Mapillary). La ruta igual quedo guardada.")
+                await update.message.reply_text("⚠️ armar_catalogo_eventos devolvio vacio. Revisa los logs de Render (buscar '[Mapillary]') para el motivo exacto. La ruta igual quedo guardada.")
         except Exception as e:
-            logger.error("Error armando catalogo de eventos: " + str(e))
-            await update.message.reply_text("⚠️ Error armando el catalogo automatico: "+str(e)+chr(10)+"La ruta igual quedo guardada.")
+            logger.exception("Error armando catalogo de eventos")
+            await update.message.reply_text("⚠️ Error armando el catalogo automatico: "+repr(e)+chr(10)+"La ruta igual quedo guardada.")
     elif update.message.video or update.message.document:
         RUTAS_GUARDADAS[nombre]={"nombre":nombre,"tipo":"video_telegram","fecha":datetime.now().strftime("%d/%m/%Y %H:%M")}
         await update.message.reply_text("✅ Video recibido!"+chr(10)+"Ruta base guardada: "+nombre)
