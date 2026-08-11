@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN       = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY")
-MAPILLARY_TOKEN = os.getenv("MAPILLARY_TOKEN")
+MAPILLARY_TOKEN = (os.getenv("MAPILLARY_TOKEN") or "").strip()
 TOTP_SECRET     = os.getenv("TOTP_SECRET")
 DOMINIO         = os.getenv("DOMINIO_EMAIL", "telconet.ec")
 GEMINI_URL      = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=" + (GEMINI_API_KEY or "")
@@ -184,8 +184,7 @@ async def mapillary_obtener_secuencia(pkey):
     """PRUEBA: baja todos los puntos (id, lat, lon) de la secuencia de Mapillary
     a la que pertenece esa foto puntual, ordenados por fecha de captura."""
     if not MAPILLARY_TOKEN:
-        logger.error("[Mapillary] Falta MAPILLARY_TOKEN")
-        return []
+        raise Exception("MAPILLARY_TOKEN esta vacio o no configurado en las variables de entorno de Render")
     headers = {"Authorization": "OAuth " + MAPILLARY_TOKEN}
     async with httpx.AsyncClient(timeout=30) as client:
         # 1. de la foto puntual, sacar a que secuencia pertenece
@@ -1545,6 +1544,22 @@ class PingHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"ruta": ruta, "eventos": estado}, ensure_ascii=False).encode("utf-8"))
+            return
+        if self.path.startswith("/diag_token"):
+            # DEBUG: confirma (sin revelar el token completo) si MAPILLARY_TOKEN
+            # llego bien al proceso, cuantos caracteres tiene, y como empieza/termina.
+            t = MAPILLARY_TOKEN
+            info = {
+                "configurado": bool(t),
+                "longitud": len(t),
+                "empieza_con": t[:5] if t else "",
+                "termina_con": t[-5:] if t else "",
+                "formato_valido": t.startswith("MLY|") if t else False,
+            }
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(info).encode())
             return
         self.send_response(200); self.end_headers(); self.wfile.write(b"RecorridosIA OK")
 
