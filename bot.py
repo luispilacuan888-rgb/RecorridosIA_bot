@@ -238,12 +238,10 @@ async def armar_catalogo_eventos(nombre_ruta, mapillary_link, cantidad_eventos=2
     de manera pareja a lo largo de la ruta, para usarlos como puntos de control."""
     pkey = _extraer_pkey(mapillary_link)
     if not pkey:
-        logger.error("[Mapillary] No se pudo extraer pKey del link: " + str(mapillary_link))
-        return None
+        raise Exception(f"No se pudo extraer pKey del link: {mapillary_link}")
     puntos = await mapillary_obtener_secuencia(pkey)
     if not puntos:
-        logger.error(f"[Mapillary] mapillary_obtener_secuencia devolvio vacio para pkey={pkey}")
-        return None
+        raise Exception(f"mapillary_obtener_secuencia devolvio 0 puntos para pkey={pkey}")
 
     total = len(puntos)
     logger.info(f"[Mapillary] {total} puntos obtenidos para {nombre_ruta}, armando {cantidad_eventos} eventos")
@@ -1238,17 +1236,15 @@ async def recv_nueva_ruta_video(update, ctx):
         await update.message.reply_text("✅ Ruta base guardada!"+chr(10)+"Nombre: "+nombre+chr(10)+"Link: "+link)
 
         # PRUEBA: armar el catalogo de 2 eventos de control bajando la secuencia de Mapillary
-        await update.message.reply_text("Armando catalogo de eventos desde Mapillary, un momento...")
+        pkey_detectado = _extraer_pkey(link)
+        await update.message.reply_text("pKey detectado del link: "+str(pkey_detectado)+chr(10)+"Armando catalogo de eventos desde Mapillary, un momento...")
         try:
             eventos = await armar_catalogo_eventos(nombre, link, cantidad_eventos=2)
-            if eventos:
-                resumen = chr(10).join([f"  Evento {e['evento']}: {e['lat']:.6f}, {e['lon']:.6f}" for e in eventos])
-                await update.message.reply_text("✅ Catalogo de PRUEBA armado (2 eventos):"+chr(10)+resumen)
-            else:
-                await update.message.reply_text("⚠️ armar_catalogo_eventos devolvio vacio. Revisa los logs de Render (buscar '[Mapillary]') para el motivo exacto. La ruta igual quedo guardada.")
+            resumen = chr(10).join([f"  Evento {e['evento']}: {e['lat']:.6f}, {e['lon']:.6f}" for e in eventos])
+            await update.message.reply_text("✅ Catalogo de PRUEBA armado (2 eventos):"+chr(10)+resumen)
         except Exception as e:
             logger.exception("Error armando catalogo de eventos")
-            await update.message.reply_text("⚠️ Error armando el catalogo automatico: "+repr(e)+chr(10)+"La ruta igual quedo guardada.")
+            await update.message.reply_text("⚠️ Error armando el catalogo (pKey="+str(pkey_detectado)+"): "+repr(e)+chr(10)+"La ruta igual quedo guardada.")
     elif update.message.video or update.message.document:
         RUTAS_GUARDADAS[nombre]={"nombre":nombre,"tipo":"video_telegram","fecha":datetime.now().strftime("%d/%m/%Y %H:%M")}
         await update.message.reply_text("✅ Video recibido!"+chr(10)+"Ruta base guardada: "+nombre)
