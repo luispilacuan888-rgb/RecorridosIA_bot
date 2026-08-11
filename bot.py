@@ -1284,8 +1284,44 @@ async def mis_rutas(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         msg+=str(i)+". "+nombre+chr(10)+"   Fecha: "+info.get("fecha","")+chr(10)
         if info.get("mapillary_link"): msg+="   Link: "+info["mapillary_link"][:50]+"..."+chr(10)
         msg+=chr(10)
-    await update.message.reply_text(msg)
+    msg+="Toca el nombre para eliminar una ruta:"
+    lista_nombres=list(RUTAS_GUARDADAS.keys())
+    ctx.user_data["_lista_rutas_borrar"]=lista_nombres
+    botones=[[InlineKeyboardButton("🗑️ "+nombre[:40],callback_data="del_ruta_"+str(idx))] for idx,nombre in enumerate(lista_nombres)]
+    await update.message.reply_text(msg,reply_markup=InlineKeyboardMarkup(botones))
     return MENU_PRINCIPAL
+
+async def borrar_ruta_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query; await query.answer()
+    idx=int(query.data.replace("del_ruta_","",1))
+    lista_nombres=ctx.user_data.get("_lista_rutas_borrar",[])
+    if idx>=len(lista_nombres):
+        await query.edit_message_text("Esa ruta ya no existe (la lista cambio). Usa Mis Rutas de nuevo.")
+        return
+    nombre=lista_nombres[idx]
+    if ctx.user_data.get("_confirmar_borrado")==nombre:
+        # Segundo toque = confirmado, se borra de verdad
+        RUTAS_GUARDADAS.pop(nombre, None)
+        EVENTOS_RUTA.pop(nombre, None)
+        EVENTOS_CAPTURADOS.pop(nombre, None)
+        NOVEDADES_EN_VIVO.pop(nombre, None)
+        RECORRIDOS_EN_VIVO.pop(nombre, None)
+        ctx.user_data.pop("_confirmar_borrado", None)
+        await query.edit_message_text("🗑️ Ruta eliminada: "+nombre[:60])
+        logger.info(f"Ruta eliminada por usuario: {nombre}")
+    else:
+        # Primer toque = pedir confirmacion, para no borrar por accidente
+        ctx.user_data["_confirmar_borrado"]=nombre
+        teclado=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Si, eliminar",callback_data="del_ruta_"+str(idx))],
+            [InlineKeyboardButton("Cancelar",callback_data="del_cancelar")],
+        ])
+        await query.edit_message_text("¿Seguro que quieres eliminar la ruta:"+chr(10)+nombre[:200]+" ?"+chr(10)+chr(10)+"Esto tambien borra su catalogo de eventos si tenia.",reply_markup=teclado)
+
+async def borrar_ruta_cancelar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query; await query.answer()
+    ctx.user_data.pop("_confirmar_borrado", None)
+    await query.edit_message_text("Cancelado, no se elimino ninguna ruta.")
 
 async def ayuda(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -1629,6 +1665,8 @@ def build_app():
     app.add_handler(CallbackQueryHandler(tab_callback,pattern="^rep_"))
     app.add_handler(CallbackQueryHandler(vb_callback,pattern="^vb_"))
     app.add_handler(CallbackQueryHandler(tab_callback,pattern="^manga_der_"))
+    app.add_handler(CallbackQueryHandler(borrar_ruta_callback,pattern="^del_ruta_"))
+    app.add_handler(CallbackQueryHandler(borrar_ruta_cancelar,pattern="^del_cancelar$"))
     return app
 
 async def run_bot():
