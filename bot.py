@@ -202,8 +202,9 @@ async def mapillary_obtener_secuencia(pkey):
         if r2.status_code != 200:
             raise Exception(f"Mapillary respondio {r2.status_code} al pedir image_ids: {r2.text[:200]}")
         ids = [x["id"] for x in r2.json().get("data", [])]
+        logger.info(f"[Mapillary] image_ids devolvio {len(ids)} ids para sequence_id={sequence_id}")
         if not ids:
-            raise Exception("La secuencia no devolvio ninguna imagen")
+            raise Exception(f"La secuencia no devolvio ninguna imagen (respuesta cruda: {r2.text[:300]})")
 
         # 3. traer lat/lon + fecha de captura de cada imagen, en lotes de 50
         puntos = []
@@ -212,11 +213,19 @@ async def mapillary_obtener_secuencia(pkey):
             r3 = await client.get("https://graph.mapillary.com/images",
                                    headers=headers, params={"ids": ",".join(lote),
                                             "fields": "id,geometry,captured_at"})
-            r3.raise_for_status()
-            for item in r3.json().get("data", []):
+            if r3.status_code != 200:
+                raise Exception(f"Mapillary respondio {r3.status_code} al pedir images (lote {i}): {r3.text[:200]}")
+            datos_lote = r3.json().get("data", [])
+            logger.info(f"[Mapillary] lote {i//50+1}: pedidos {len(lote)}, recibidos {len(datos_lote)}")
+            for item in datos_lote:
+                if "geometry" not in item:
+                    continue
                 lon, lat = item["geometry"]["coordinates"]
                 puntos.append({"id": item["id"], "lat": lat, "lon": lon, "captured_at": item.get("captured_at", 0)})
 
+        logger.info(f"[Mapillary] total final: {len(puntos)} puntos con geometria, de {len(ids)} ids")
+        if not puntos and ids:
+            raise Exception(f"Se obtuvieron {len(ids)} ids de la secuencia, pero NINGUNO trajo datos de geometria (posible limite de tasa de Mapillary o cambio en la API)")
         puntos.sort(key=lambda p: p["captured_at"])
         return puntos
 
@@ -241,7 +250,7 @@ async def armar_catalogo_eventos(nombre_ruta, mapillary_link, cantidad_eventos=2
         raise Exception(f"No se pudo extraer pKey del link: {mapillary_link}")
     puntos = await mapillary_obtener_secuencia(pkey)
     if not puntos:
-        raise Exception(f"mapillary_obtener_secuencia devolvio 0 puntos para pkey={pkey}")
+        raise Exception(f"mapillary_obtener_secuencia devolvio 0 puntos con geometria para pkey={pkey} (revisar logs '[Mapillary]' para ver cuantos ids se obtuvieron)")
 
     total = len(puntos)
     logger.info(f"[Mapillary] {total} puntos obtenidos para {nombre_ruta}, armando {cantidad_eventos} eventos")
@@ -819,12 +828,38 @@ async def tab_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif data in ("tab_reportes","tab_fotos"):
         nombre_tab="REPORTES_DE_RECORRIDOS" if data=="tab_reportes" else "FOTOS_ANEXAS_AL_REPORTE"
         ctx.user_data["origen_tab"]="reportes" if data=="tab_reportes" else "fotos"
-        teclado2=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Manual (sin senial)",callback_data="rep_manual"),InlineKeyboardButton("Con IA (Gemini)",callback_data="rep_ia")],
-            [InlineKeyboardButton("Volver al menu",callback_data="tab_menu")],
-        ])
+        nombre_ruta_actual = ctx.user_data.get("datos",{}).get("recorrido",{}).get("nombre_ruta","")
+        tiene_frames_en_vivo = data=="tab_fotos" and nombre_ruta_actual in NOVEDADES_EN_VIVO
+        botones_fila=[InlineKeyboardButton("Manual (sin senial)",callback_data="rep_manual"),InlineKeyboardButton("Con IA (Gemini)",callback_data="rep_ia")]
+        filas=[botones_fila]
+        if tiene_frames_en_vivo:
+            cant=len(NOVEDADES_EN_VIVO[nombre_ruta_actual])
+            filas.insert(0,[InlineKeyboardButton(f"📷 Usar frames del recorrido ({cant} detectadas)",callback_data="rep_frames_vivo")])
+        filas.append([InlineKeyboardButton("Volver al menu",callback_data="tab_menu")])
+        teclado2=InlineKeyboardMarkup(filas)
         await query.edit_message_text(nombre_tab+chr(10)+chr(10)+"Como quieres llenar esta pestana?",reply_markup=teclado2)
         return TAB_MENU
+
+    elif data=="rep_frames_vivo":
+        nombre_ruta_actual = ctx.user_data.get("datos",{}).get("recorrido",{}).get("nombre_ruta","")
+        lista = NOVEDADES_EN_VIVO.get(nombre_ruta_actual, [])
+        novedades=[]
+        for det in lista:
+            n=novedad_vacia(len(novedades)+1)
+            n["motivo"]=det.get("motivo",""); n["remedio"]=det.get("remedio","")
+            n["coordenadas"]=det.get("coordenadas",""); n["foto_antes"]=det.get("foto_antes")
+            novedades.append(n)
+        if not novedades:
+            n=novedad_vacia(1); n["motivo"]=SIN_NOV_MOTIVO; n["remedio"]=SIN_NOV_REMEDIO; novedades=[n]
+        ctx.user_data["datos"]["recorrido"]["novedades"]=novedades
+        ctx.user_data["datos"]["recorrido"]["fotos_total"]=len(lista)
+        for n in novedades:
+            m=n["motivo"]
+            if m!=SIN_NOV_MOTIVO:
+                nch=ctx.user_data["datos"]["mpriu"]["novedades_check"]
+                nch[m]={"check":True,"cantidad":nch.get(m,{}).get("cantidad",0)+1}
+        await query.edit_message_text("✅ Se cargaron "+str(len(novedades))+" novedad(es) detectadas automaticamente durante el recorrido con la camara.")
+        return await tab_menu(update, ctx)
 
     elif data=="rep_manual" and ctx.user_data.get("origen_tab")=="reportes":
         # Flujo NUEVO: preguntas una por una, en vez de plantilla para copiar/pegar.
