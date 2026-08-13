@@ -6,7 +6,7 @@ from PIL import Image, ImageDraw, ImageFont
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, ConversationHandler, ContextTypes, filters, CallbackQueryHandler
+from telegram.ext import Application, CommandHandler, MessageHandler, ConversationHandler, ContextTypes, filters, CallbackQueryHandler, ApplicationHandlerStop
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1101,10 +1101,30 @@ async def gen_confirmar_fecha_horas(update, ctx):
     datos["ciu"]["distancia_ruta"]=tmp.get("distancia","")
     r["fecha"]=tmp.get("fecha",""); r["hora_inicio"]=tmp.get("hora_inicio",""); r["hora_fin"]=tmp.get("hora_fin","")
 
+    # AUTOMATICO: si esta ruta tuvo frames analizados en vivo por la IA, cargarlos
+    # SOLO ya, sin preguntar ni requerir que el usuario elija ningun boton despues.
+    msg_frames = ""
+    lista_vivo = NOVEDADES_EN_VIVO.get(r["nombre_ruta"], [])
+    if lista_vivo:
+        novedades=[]
+        for det in lista_vivo:
+            n=novedad_vacia(len(novedades)+1)
+            n["motivo"]=det.get("motivo",""); n["remedio"]=det.get("remedio","")
+            n["coordenadas"]=det.get("coordenadas",""); n["foto_antes"]=det.get("foto_antes")
+            novedades.append(n)
+        r["novedades"]=novedades
+        r["fotos_total"]=len(lista_vivo)
+        for n in novedades:
+            m=n["motivo"]
+            if m!=SIN_NOV_MOTIVO:
+                nch=datos["mpriu"]["novedades_check"]
+                nch[m]={"check":True,"cantidad":nch.get(m,{}).get("cantidad",0)+1}
+        msg_frames = chr(10)+chr(10)+"📷 "+str(len(novedades))+" novedad(es) de la camara ya se cargaron solas en el informe."
+
     await update.message.reply_text(
         "✅ REPORTES_DE_RECORRIDOS guardado"+chr(10)+"━━━━━━━━━━━━━━━━━━━━━━━━━━━━"+chr(10)+
         "Ruta: "+r["nombre_ruta"]+chr(10)+"Cuadrilla: "+r["codigo_cuadrilla"]+chr(10)+
-        "Fecha: "+r["fecha"]+"   "+r["hora_inicio"]+" - "+r["hora_fin"])
+        "Fecha: "+r["fecha"]+"   "+r["hora_inicio"]+" - "+r["hora_fin"]+msg_frames)
     return await tab_menu(update, ctx)
 
 # ── REPORTES HANDLERS ─────────────────────────────────────────────────────────
@@ -1234,6 +1254,19 @@ async def enviar_excel(update, ctx):
         await msg.reply_text("Generando informe FOR FO 02...")
         if "datos" not in ctx.user_data: ctx.user_data["datos"]=datos_vacios()
         datos=ctx.user_data["datos"]
+        # AUTOMATICO: si todavia no hay novedades cargadas pero la ruta tuvo frames
+        # en vivo detectados por la IA, cargarlos aca tambien (por si nunca paso por Reportes).
+        nombre_ruta_actual = datos["recorrido"].get("nombre_ruta","")
+        if not datos["recorrido"].get("novedades") and nombre_ruta_actual in NOVEDADES_EN_VIVO:
+            lista_vivo = NOVEDADES_EN_VIVO[nombre_ruta_actual]
+            novedades=[]
+            for det in lista_vivo:
+                n=novedad_vacia(len(novedades)+1)
+                n["motivo"]=det.get("motivo",""); n["remedio"]=det.get("remedio","")
+                n["coordenadas"]=det.get("coordenadas",""); n["foto_antes"]=det.get("foto_antes")
+                novedades.append(n)
+            datos["recorrido"]["novedades"]=novedades
+            datos["recorrido"]["fotos_total"]=len(lista_vivo)
         if not datos["recorrido"].get("novedades"):
             nov=novedad_vacia(1); nov["motivo"]=SIN_NOV_MOTIVO; nov["remedio"]=SIN_NOV_REMEDIO
             datos["recorrido"]["novedades"]=[nov]
@@ -1670,6 +1703,67 @@ def start_web():
     server.serve_forever()
 
 # ── BUILD APP ─────────────────────────────────────────────────────────────────
+# ── REGISTRAR FOTO "DESPUES" DE UNA NOVEDAD YA REPORTADA ──────────────────────
+# Se puede usar en cualquier momento (aunque ya se haya generado el Excel antes):
+#   /despues            -> el bot pregunta el numero de evento
+#   (respondes: 3)       -> el bot pide la foto
+#   (mandas la foto)      -> se guarda como "foto_despues" del evento 3, listo
+async def cmd_despues(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    datos = ctx.user_data.get("datos")
+    novedades = datos["recorrido"].get("novedades", []) if datos else []
+    if not novedades:
+        await update.message.reply_text("Todavia no hay novedades cargadas en este informe.")
+        return
+    resumen = chr(10).join([f"  {n['numero']}. {n.get('motivo','')[:50]}" for n in novedades])
+    ctx.user_data["_despues_esperando"] = "numero"
+    await update.message.reply_text(
+        "Registrar foto DESPUES"+chr(10)+"━━━━━━━━━━━━━━━━━━━━━━━━━━━━"+chr(10)+
+        "Eventos actuales:"+chr(10)+resumen+chr(10)+chr(10)+
+        "Escribe el NUMERO del evento a actualizar:")
+
+async def _interceptar_despues(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Corre ANTES que el ConversationHandler (group=-1). Si no estamos en medio
+    de un /despues, no hace nada y deja pasar el mensaje normal."""
+    estado = ctx.user_data.get("_despues_esperando")
+    if not estado:
+        return  # no interceptar, seguir con el flujo normal del bot
+
+    if estado == "numero" and update.message and update.message.text:
+        txt = update.message.text.strip()
+        if not txt.isdigit():
+            await update.message.reply_text("Escribe solo el numero del evento (ej: 3)")
+            raise ApplicationHandlerStop
+        num = int(txt)
+        datos = ctx.user_data.get("datos", {})
+        novedades = datos.get("recorrido", {}).get("novedades", [])
+        if num < 1 or num > len(novedades):
+            await update.message.reply_text(f"No existe el evento {num}. Escribe un numero valido.")
+            raise ApplicationHandlerStop
+        ctx.user_data["_despues_numero"] = num
+        ctx.user_data["_despues_esperando"] = "foto"
+        await update.message.reply_text(f"Ok, evento {num}. Ahora manda la foto del DESPUES:")
+        raise ApplicationHandlerStop
+
+    if estado == "foto":
+        if update.message and update.message.photo:
+            foto = await update.message.photo[-1].get_file()
+            img_bytes = bytes(await foto.download_as_bytearray())
+            num = ctx.user_data.get("_despues_numero")
+            datos = ctx.user_data.get("datos", {})
+            novedades = datos.get("recorrido", {}).get("novedades", [])
+            if num and 1 <= num <= len(novedades):
+                novedades[num-1]["foto_despues"] = img_bytes
+                await update.message.reply_text(f"✅ Foto DESPUES guardada para el evento {num}. Ya vas a poder generar el Excel actualizado.")
+            else:
+                await update.message.reply_text("Hubo un problema encontrando ese evento, intenta de nuevo con /despues")
+            ctx.user_data.pop("_despues_esperando", None)
+            ctx.user_data.pop("_despues_numero", None)
+            raise ApplicationHandlerStop
+        else:
+            await update.message.reply_text("Manda una FOTO (no texto) para el despues.")
+            raise ApplicationHandlerStop
+
+
 def build_app():
     app=Application.builder().token(BOT_TOKEN).build()
     conv=ConversationHandler(
@@ -1705,6 +1799,12 @@ def build_app():
         fallbacks=[CommandHandler("cancelar",cancelar)],
         allow_reentry=True,
     )
+    # Estos corren ANTES que el ConversationHandler (group=-1), para poder
+    # interceptar el flujo de /despues sin romper el resto del bot.
+    app.add_handler(CommandHandler("despues", cmd_despues), group=-1)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _interceptar_despues), group=-1)
+    app.add_handler(MessageHandler(filters.PHOTO, _interceptar_despues), group=-1)
+
     app.add_handler(conv)
     app.add_handler(CommandHandler("preguntar", cmd_preguntar))
     app.add_handler(CallbackQueryHandler(tab_callback,pattern="^tab_"))
