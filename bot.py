@@ -829,12 +829,12 @@ async def tab_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         nombre_tab="REPORTES_DE_RECORRIDOS" if data=="tab_reportes" else "FOTOS_ANEXAS_AL_REPORTE"
         ctx.user_data["origen_tab"]="reportes" if data=="tab_reportes" else "fotos"
         nombre_ruta_actual = ctx.user_data.get("datos",{}).get("recorrido",{}).get("nombre_ruta","")
-        tiene_frames_en_vivo = data=="tab_fotos" and nombre_ruta_actual in NOVEDADES_EN_VIVO
+        tiene_frames_en_vivo = data=="tab_fotos" and nombre_ruta_actual in EVENTOS_PRUEBA
         botones_fila=[InlineKeyboardButton("Manual (sin senial)",callback_data="rep_manual"),InlineKeyboardButton("Con IA (Gemini)",callback_data="rep_ia")]
         filas=[botones_fila]
         if tiene_frames_en_vivo:
-            cant=len(NOVEDADES_EN_VIVO[nombre_ruta_actual])
-            filas.insert(0,[InlineKeyboardButton(f"📷 Usar frames del recorrido ({cant} detectadas)",callback_data="rep_frames_vivo")])
+            cant=len(EVENTOS_PRUEBA[nombre_ruta_actual])
+            filas.insert(0,[InlineKeyboardButton(f"📷 Usar eventos del recorrido ({cant} detectados)",callback_data="rep_frames_vivo")])
         filas.append([InlineKeyboardButton("Volver al menu",callback_data="tab_menu")])
         teclado2=InlineKeyboardMarkup(filas)
         await query.edit_message_text(nombre_tab+chr(10)+chr(10)+"Como quieres llenar esta pestana?",reply_markup=teclado2)
@@ -842,7 +842,7 @@ async def tab_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif data=="rep_frames_vivo":
         nombre_ruta_actual = ctx.user_data.get("datos",{}).get("recorrido",{}).get("nombre_ruta","")
-        lista = NOVEDADES_EN_VIVO.get(nombre_ruta_actual, [])
+        lista = EVENTOS_PRUEBA.get(nombre_ruta_actual, [])
         novedades=[]
         for det in lista:
             n=novedad_vacia(len(novedades)+1)
@@ -1101,25 +1101,36 @@ async def gen_confirmar_fecha_horas(update, ctx):
     datos["ciu"]["distancia_ruta"]=tmp.get("distancia","")
     r["fecha"]=tmp.get("fecha",""); r["hora_inicio"]=tmp.get("hora_inicio",""); r["hora_fin"]=tmp.get("hora_fin","")
 
-    # AUTOMATICO: si esta ruta tuvo frames analizados en vivo por la IA, cargarlos
-    # SOLO ya, sin preguntar ni requerir que el usuario elija ningun boton despues.
+    # AUTOMATICO: si esta ruta tuvo eventos de prueba (cada N frames, con o sin
+    # novedad), cargarlos SOLOS ya, sin preguntar ni requerir botones despues.
     msg_frames = ""
-    lista_vivo = NOVEDADES_EN_VIVO.get(r["nombre_ruta"], [])
-    if lista_vivo:
+    eventos_prueba = EVENTOS_PRUEBA.get(r["nombre_ruta"], [])
+    if eventos_prueba:
         novedades=[]
-        for det in lista_vivo:
+        for det in eventos_prueba:
             n=novedad_vacia(len(novedades)+1)
             n["motivo"]=det.get("motivo",""); n["remedio"]=det.get("remedio","")
             n["coordenadas"]=det.get("coordenadas",""); n["foto_antes"]=det.get("foto_antes")
             novedades.append(n)
         r["novedades"]=novedades
-        r["fotos_total"]=len(lista_vivo)
+        r["fotos_total"]=len(eventos_prueba)
         for n in novedades:
             m=n["motivo"]
             if m!=SIN_NOV_MOTIVO:
                 nch=datos["mpriu"]["novedades_check"]
                 nch[m]={"check":True,"cantidad":nch.get(m,{}).get("cantidad",0)+1}
-        msg_frames = chr(10)+chr(10)+"📷 "+str(len(novedades))+" novedad(es) de la camara ya se cargaron solas en el informe."
+        con_novedad = sum(1 for n in novedades if n["motivo"]!=SIN_NOV_MOTIVO)
+        msg_frames = chr(10)+chr(10)+"📷 "+str(len(novedades))+" evento(s) cargados del recorrido ("+str(con_novedad)+" con novedad real)."
+    elif ULTIMA_FOTO_RUTA.get(r["nombre_ruta"]):
+        # No alcanzo a formarse ningun evento (recorrido muy corto), pero SI hubo
+        # camara: dejar 1 foto de confirmacion en vez de dejar todo vacio.
+        n = novedad_vacia(1)
+        n["motivo"] = SIN_NOV_MOTIVO
+        n["remedio"] = SIN_NOV_REMEDIO
+        n["foto_antes"] = ULTIMA_FOTO_RUTA[r["nombre_ruta"]]
+        r["novedades"] = [n]
+        r["fotos_total"] = 1
+        msg_frames = chr(10)+chr(10)+"📷 Recorrido muy corto para varios eventos. Se agrego 1 foto de confirmacion."
 
     await update.message.reply_text(
         "✅ REPORTES_DE_RECORRIDOS guardado"+chr(10)+"━━━━━━━━━━━━━━━━━━━━━━━━━━━━"+chr(10)+
@@ -1257,8 +1268,8 @@ async def enviar_excel(update, ctx):
         # AUTOMATICO: si todavia no hay novedades cargadas pero la ruta tuvo frames
         # en vivo detectados por la IA, cargarlos aca tambien (por si nunca paso por Reportes).
         nombre_ruta_actual = datos["recorrido"].get("nombre_ruta","")
-        if not datos["recorrido"].get("novedades") and nombre_ruta_actual in NOVEDADES_EN_VIVO:
-            lista_vivo = NOVEDADES_EN_VIVO[nombre_ruta_actual]
+        if not datos["recorrido"].get("novedades") and nombre_ruta_actual in EVENTOS_PRUEBA:
+            lista_vivo = EVENTOS_PRUEBA[nombre_ruta_actual]
             novedades=[]
             for det in lista_vivo:
                 n=novedad_vacia(len(novedades)+1)
@@ -1269,6 +1280,9 @@ async def enviar_excel(update, ctx):
             datos["recorrido"]["fotos_total"]=len(lista_vivo)
         if not datos["recorrido"].get("novedades"):
             nov=novedad_vacia(1); nov["motivo"]=SIN_NOV_MOTIVO; nov["remedio"]=SIN_NOV_REMEDIO
+            if ULTIMA_FOTO_RUTA.get(nombre_ruta_actual):
+                nov["foto_antes"]=ULTIMA_FOTO_RUTA[nombre_ruta_actual]
+                datos["recorrido"]["fotos_total"]=1
             datos["recorrido"]["novedades"]=[nov]
         xl=generar_excel(datos); nombre=nombre_archivo(datos)
         caption="FOR FO 02 generado"+chr(10)+"Ruta: "+(datos["recorrido"]["nombre_ruta"] or "SIN NOMBRE")+chr(10)+"Novedades: "+str(len(datos["recorrido"]["novedades"]))
@@ -1367,6 +1381,9 @@ async def borrar_ruta_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         RUTAS_GUARDADAS.pop(nombre, None)
         EVENTOS_RUTA.pop(nombre, None)
         EVENTOS_CAPTURADOS.pop(nombre, None)
+        EVENTOS_PRUEBA.pop(nombre, None)
+        CHECKPOINT_CONTADOR.pop(nombre, None)
+        ULTIMA_FOTO_RUTA.pop(nombre, None)
         NOVEDADES_EN_VIVO.pop(nombre, None)
         RECORRIDOS_EN_VIVO.pop(nombre, None)
         ctx.user_data.pop("_confirmar_borrado", None)
@@ -1413,6 +1430,16 @@ RECORRIDOS_EN_VIVO = {}
 # PRUEBA: novedades detectadas automaticamente por Gemini durante el recorrido en vivo
 # { ruta_id: [ {"motivo":..., "remedio":..., "coordenadas":..., "foto_antes": bytes, "indice": int, "hora": str}, ... ] }
 NOVEDADES_EN_VIVO = {}
+
+# PRUEBA: eventos repartidos cada N frames (haya o no novedad), para simular
+# multiples puntos de control mientras no tenemos el catalogo real de Mapillary.
+EVENTOS_PRUEBA = {}
+CHECKPOINT_CONTADOR = {}
+INTERVALO_CHECKPOINT = 3  # cada 3 frames analizados = 1 evento nuevo (~6 seg con envio cada 2 seg)
+
+# Guarda SIEMPRE la ultima foto (con sello) recibida de cada ruta, tenga o no
+# novedad. Sirve como "foto de confirmacion" cuando no hubo ninguna novedad.
+ULTIMA_FOTO_RUTA = {}
 
 # Loop de asyncio dedicado para poder llamar funciones async (Gemini) desde el
 # servidor HTTP sincrono, sin bloquear ni pelear con el loop del bot de Telegram.
@@ -1479,6 +1506,22 @@ def _analizar_frame_en_fondo(ruta, indice, datos_con_sello):
                 resultado["hora"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
                 NOVEDADES_EN_VIVO.setdefault(ruta, []).append(resultado)
                 logger.info(f"[PRUEBA] Novedad IA detectada: ruta={ruta} indice={indice} motivo={resultado.get('motivo')}")
+
+            # PRUEBA: ademas de guardar novedades reales, armar "eventos" repartidos
+            # cada N frames (haya o no novedad) -- esto simula los futuros puntos de
+            # control de Mapillary, para poder ver varios bloques llenos en el Excel
+            # sin depender todavia de GPS/video base.
+            contador = CHECKPOINT_CONTADOR.get(ruta, 0) + 1
+            CHECKPOINT_CONTADOR[ruta] = contador
+            if contador % INTERVALO_CHECKPOINT == 0:
+                entrada = dict(resultado) if resultado else {
+                    "motivo": SIN_NOV_MOTIVO, "remedio": SIN_NOV_REMEDIO,
+                    "coordenadas": "", "foto_antes": datos_con_sello,
+                }
+                entrada["indice"] = int(indice)
+                entrada["hora"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                EVENTOS_PRUEBA.setdefault(ruta, []).append(entrada)
+                logger.info(f"[PRUEBA] Evento de prueba #{len(EVENTOS_PRUEBA[ruta])} agregado: ruta={ruta} indice={indice}")
         except Exception as e:
             logger.error(f"[PRUEBA] Error analizando frame con Gemini: {e}")
     asyncio.run_coroutine_threadsafe(_tarea(), _frame_loop)
@@ -1648,6 +1691,7 @@ class PingHandler(BaseHTTPRequestHandler):
 
             # PRUEBA: pegar logo + fecha/hora + coordenadas sobre el frame antes de guardarlo
             datos_con_sello = _sello_frame(datos, lat, lon)
+            ULTIMA_FOTO_RUTA[ruta] = datos_con_sello  # foto de confirmacion, se actualiza con cada frame
 
             # Guardar el frame (ya con sello) en disco: /tmp/frames/NOMBRE_RUTA/000123.jpg
             carpeta_ruta = os.path.join(FRAMES_DIR, ruta)
