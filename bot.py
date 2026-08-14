@@ -1815,7 +1815,7 @@ def build_app():
         states={
             ESPERANDO_TOTP:   [MessageHandler(filters.TEXT&~filters.COMMAND,handler_totp)],
             MENU_PRINCIPAL:   [MessageHandler(filters.Regex("Generar Informe"),generar_informe),MessageHandler(filters.Regex("Nueva Ruta Base"),nueva_ruta),MessageHandler(filters.Regex("Mis Rutas"),mis_rutas),MessageHandler(filters.Regex("Ayuda"),ayuda),MessageHandler(filters.TEXT&~filters.COMMAND,menu_principal)],
-            TAB_MENU:         [MessageHandler(filters.TEXT&~filters.COMMAND,generar_informe)],
+            TAB_MENU:         [CallbackQueryHandler(tab_callback), MessageHandler(filters.TEXT&~filters.COMMAND,generar_informe)],
             TAB_CIU_HERR:     [MessageHandler(filters.TEXT&~filters.COMMAND,tab_ciu_herr)],
             TAB_CIU_EQUI:     [MessageHandler(filters.TEXT&~filters.COMMAND,tab_ciu_equi)],
             TAB_CIU_MATE:     [MessageHandler(filters.TEXT&~filters.COMMAND,tab_ciu_mate)],
@@ -1833,7 +1833,7 @@ def build_app():
             GENERAR_CONFIRMAR:   [MessageHandler(filters.TEXT&~filters.COMMAND,gen_confirmar_fecha_horas)],
             TAB_NOVEDADES_IA: [MessageHandler(filters.PHOTO,tab_novedades_ia),MessageHandler(filters.TEXT&~filters.COMMAND,tab_novedades_ia)],
             MANGA_NOMBRE:     [MessageHandler(filters.TEXT&~filters.COMMAND,recv_manga_nombre)],
-            MANGA_COORDS:     [MessageHandler(filters.TEXT&~filters.COMMAND,recv_manga_coords)],
+            MANGA_COORDS:     [CallbackQueryHandler(tab_callback), MessageHandler(filters.TEXT&~filters.COMMAND,recv_manga_coords)],
             MANGA_OBS:        [MessageHandler(filters.TEXT&~filters.COMMAND,recv_manga_obs)],
             HILO_ODF:         [MessageHandler(filters.TEXT&~filters.COMMAND,recv_hilo_odf)],
             HILO_DATOS:       [MessageHandler(filters.TEXT&~filters.COMMAND,recv_hilo_datos)],
